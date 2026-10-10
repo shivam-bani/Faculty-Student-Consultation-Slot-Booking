@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Welcome, Swastika! - CampusSync</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">CampusSync</div>
+    <nav>
+      <a class="nav-item active" href="student-dashboard.html">Dashboard</a>
+      <a class="nav-item" href="book.html">Book Consultation</a>
+      <a class="nav-item" href="appointments.html">My Appointments</a>
+      <a class="nav-item" href="student-notifications.html">Notifications<span class="badge">2</span></a>
+    </nav>
+    <a class="nav-item" href="index.html">Logout</a>
+  </aside>
+  <main>
+    <header class="topbar">
+      <div><h2>Welcome, Swastika!</h2><p class="muted">Here's what's happening today.</p></div>
+      <div class="user"><span>Swastika Anand</span><small>Student</small></div>
+    </header>
+    <div class="stats">
+      <div class="stat"><span>Open Sessions</span><b>4</b></div>
+      <div class="stat"><span>Active Bookings</span><b>1</b></div>
+      <div class="stat"><span>New Notifications</span><b>2</b></div>
+    </div>
+    <div class="card">
+      <h3>My Appointments</h3>
+        <div class="table-wrap"><table>
+          <tr><th>Token</th><th>Faculty</th><th>Date</th><th>Time</th><th>Status</th></tr>
+          <tr><td>#3</td><td>Prof. Sharma</td><td>26 May 2025</td><td>10:00 - 11:00</td><td><span class="pill waiting">Waiting</span></td></tr>
+          <tr><td>#1</td><td>Prof. Verma</td><td>24 May 2025</td><td>14:00 - 15:00</td><td><span class="pill completed">Completed</span></td></tr>
+          <tr><td>#2</td><td>Prof. Khan</td><td>22 May 2025</td><td>11:00 - 12:00</td><td><span class="pill cancelled">Cancelled</span></td></tr>
+        </table></div>
+    </div>
+  </main>
+</div>
+</body>
+</html>

@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Book Consultation - CampusSync</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">CampusSync</div>
+    <nav>
+      <a class="nav-item" href="student-dashboard.html">Dashboard</a>
+      <a class="nav-item active" href="book.html">Book Consultation</a>
+      <a class="nav-item" href="appointments.html">My Appointments</a>
+      <a class="nav-item" href="student-notifications.html">Notifications<span class="badge">2</span></a>
+    </nav>
+    <a class="nav-item" href="index.html">Logout</a>
+  </aside>
+  <main>
+    <header class="topbar">
+      <div><h2>Book Consultation</h2><p class="muted">Pick a faculty and a session.</p></div>
+      <div class="user"><span>Swastika Anand</span><small>Student</small></div>
+    </header>
+    <div class="split">
+      <form class="card">
+        <div class="step">1. Select faculty</div>
+        <select>
+          <option>Prof. Sharma (Computer Science)</option>
+          <option>Prof. Verma (Operating Systems)</option>
+          <option>Prof. Khan (Web Technology)</option>
+        </select>
+        <div class="step">2. Select session</div>
+        <div class="slots">
+        <label class="slot"><input type="radio" name="slot"><span>26 May 2025 &nbsp; 10:00 - 11:00<span style="border:0;padding:0;cursor:inherit">2 seats left</span></span></label>
+        <label class="slot full"><input type="radio" name="slot" disabled><span>27 May 2025 &nbsp; 14:00 - 15:00<span style="border:0;padding:0;cursor:inherit">Full</span></span></label>
+        <label class="slot"><input type="radio" name="slot"><span>28 May 2025 &nbsp; 11:00 - 12:00<span style="border:0;padding:0;cursor:inherit">4 seats left</span></span></label>
+        </div>
+        <button type="button" class="btn primary full">Book Appointment</button>
+      </form>
+      <div class="card">
+        <h3>Faculty Details</h3>
+        <p><b>Prof. Sharma</b></p>
+        <p class="muted">Computer Science</p>
+      </div>
+    </div>
+  </main>
+</div>
+</body>
+</html>

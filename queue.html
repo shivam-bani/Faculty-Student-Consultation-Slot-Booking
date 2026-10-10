@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Waiting Queue - CampusSync</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">CampusSync</div>
+    <nav>
+      <a class="nav-item" href="faculty-dashboard.html">Dashboard</a>
+      <a class="nav-item" href="create-session.html">Create Session</a>
+      <a class="nav-item active" href="queue.html">Waiting Queue</a>
+      <a class="nav-item" href="faculty-notifications.html">Notifications<span class="badge">2</span></a>
+    </nav>
+    <a class="nav-item" href="index.html">Logout</a>
+  </aside>
+  <main>
+    <header class="topbar">
+      <div><h2>Waiting Queue</h2><p class="muted">Priority + aging decides who is next.</p></div>
+      <div class="user"><span>Prof. Sharma</span><small>Faculty</small></div>
+    </header>
+    <div class="card">
+      <div class="row">
+        <div><label>Session</label><select><option>26 May 2025 10:00 - 11:00</option><option>27 May 2025 14:00 - 15:00</option></select></div>
+        <div><button type="button" class="btn primary full">Call Next Student</button></div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Now Consulting</h3>
+        <div class="table-wrap"><table>
+          <tr><th>Token</th><th>Student</th><th></th></tr>
+          <tr><td>#1</td><td>Riya Singh</td><td><a class="btn small" href="#">Mark Completed</a></td></tr>
+        </table></div>
+    </div>
+    <div class="card">
+      <h3>Waiting Queue</h3>
+        <div class="table-wrap"><table>
+          <tr><th>Order</th><th>Token</th><th>Student</th><th>Priority</th><th>Waited</th><th>Score</th></tr>
+          <tr><td>1</td><td>#3</td><td>Karan Mehta</td><td>High</td><td>12 min</td><td>4</td></tr>
+          <tr><td>2</td><td>#2</td><td>Neha Sharma</td><td>Normal</td><td>10 min</td><td>3</td></tr>
+          <tr><td>3</td><td>#4</td><td>Aman Verma</td><td>Normal</td><td>2 min</td><td>1</td></tr>
+        </table></div>
+    </div>
+  </main>
+</div>
+</body>
+</html>

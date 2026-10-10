@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Create Session - CampusSync</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">CampusSync</div>
+    <nav>
+      <a class="nav-item" href="faculty-dashboard.html">Dashboard</a>
+      <a class="nav-item active" href="create-session.html">Create Session</a>
+      <a class="nav-item" href="queue.html">Waiting Queue</a>
+      <a class="nav-item" href="faculty-notifications.html">Notifications<span class="badge">2</span></a>
+    </nav>
+    <a class="nav-item" href="index.html">Logout</a>
+  </aside>
+  <main>
+    <header class="topbar">
+      <div><h2>Create Session</h2><p class="muted">Open a consultation session for students.</p></div>
+      <div class="user"><span>Prof. Sharma</span><small>Faculty</small></div>
+    </header>
+    <form class="card">
+      <h3>New session</h3>
+      <div class="row">
+        <div><label>Date</label><input type="date"></div>
+        <div><label>Start</label><input type="time" value="10:00"></div>
+        <div><label>End</label><input type="time" value="11:00"></div>
+        <div><label>Max students</label><input type="number" min="1" value="5"></div>
+        <div><button type="button" class="btn primary full">Create Session</button></div>
+      </div>
+    </form>
+    <div class="card">
+      <h3>My Sessions</h3>
+        <div class="table-wrap"><table>
+          <tr><th>Date</th><th>Time</th><th>Booked</th><th>Waiting</th><th>Status</th></tr>
+          <tr><td>26 May 2025</td><td>10:00 - 11:00</td><td>3/5</td><td>3</td><td><span class="pill open">Open</span></td></tr>
+          <tr><td>27 May 2025</td><td>14:00 - 15:00</td><td>5/5</td><td>0</td><td><span class="pill closed">Closed</span></td></tr>
+        </table></div>
+    </div>
+  </main>
+</div>
+</body>
+</html>

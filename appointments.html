@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>My Appointments - CampusSync</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">CampusSync</div>
+    <nav>
+      <a class="nav-item" href="student-dashboard.html">Dashboard</a>
+      <a class="nav-item" href="book.html">Book Consultation</a>
+      <a class="nav-item active" href="appointments.html">My Appointments</a>
+      <a class="nav-item" href="student-notifications.html">Notifications<span class="badge">2</span></a>
+    </nav>
+    <a class="nav-item" href="index.html">Logout</a>
+  </aside>
+  <main>
+    <header class="topbar">
+      <div><h2>My Appointments</h2><p class="muted">Track your token and queue position.</p></div>
+      <div class="user"><span>Swastika Anand</span><small>Student</small></div>
+    </header>
+    <div class="card">
+        <div class="table-wrap"><table>
+          <tr><th>Token</th><th>Faculty</th><th>Date</th><th>Time</th><th>Queue Position</th><th>Status</th><th></th></tr>
+          <tr><td>#3</td><td>Prof. Sharma</td><td>26 May 2025</td><td>10:00 - 11:00</td><td>2</td><td><span class="pill waiting">Waiting</span></td><td><a class="btn small danger" href="#">Cancel</a></td></tr>
+          <tr><td>#1</td><td>Prof. Verma</td><td>24 May 2025</td><td>14:00 - 15:00</td><td>-</td><td><span class="pill completed">Completed</span></td><td></td></tr>
+          <tr><td>#2</td><td>Prof. Khan</td><td>22 May 2025</td><td>11:00 - 12:00</td><td>-</td><td><span class="pill cancelled">Cancelled</span></td><td></td></tr>
+        </table></div>
+    </div>
+  </main>
+</div>
+</body>
+</html>

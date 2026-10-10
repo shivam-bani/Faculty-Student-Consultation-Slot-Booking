@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Notifications - CampusSync</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">CampusSync</div>
+    <nav>
+      <a class="nav-item" href="faculty-dashboard.html">Dashboard</a>
+      <a class="nav-item" href="create-session.html">Create Session</a>
+      <a class="nav-item" href="queue.html">Waiting Queue</a>
+      <a class="nav-item active" href="faculty-notifications.html">Notifications<span class="badge">2</span></a>
+    </nav>
+    <a class="nav-item" href="index.html">Logout</a>
+  </aside>
+  <main>
+    <header class="topbar">
+      <div><h2>Notifications</h2><p class="muted">Updates about your consultations.</p></div>
+      <div class="user"><span>Prof. Sharma</span><small>Faculty</small></div>
+    </header>
+    <div class="card">
+      <div class="card-head"><h3>All notifications</h3><a class="btn small" href="#">Mark all as read</a></div>
+      <div class="note unread"><span class="dot"></span><div>A student booked token #4<small>Today, 10:05 AM</small></div></div>
+      <div class="note unread"><span class="dot"></span><div>Token #2 was cancelled by the student.<small>Today, 09:50 AM</small></div></div>
+      <div class="note read"><span class="dot"></span><div>A student booked token #3<small>Yesterday</small></div></div>
+    </div>
+  </main>
+</div>
+</body>
+</html>
