@@ -3,45 +3,63 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Create Session - CampusSync</title>
+  <title>Create a Consultation Session - CampusSync</title>
   <link rel="stylesheet" href="style.css">
 </head>
-<body>
+<body data-role="faculty">
 <div class="app">
   <aside class="sidebar">
     <div class="brand">CampusSync</div>
-    <nav>
-      <a class="nav-item" href="faculty-dashboard.html">Dashboard</a>
-      <a class="nav-item active" href="create-session.html">Create Session</a>
-      <a class="nav-item" href="queue.html">Waiting Queue</a>
-      <a class="nav-item" href="faculty-notifications.html">Notifications<span class="badge">2</span></a>
+    <div class="portal">Faculty Portal</div>
+    <nav aria-label="Main navigation">
+        <a class="nav-item" href="faculty-dashboard.html">Dashboard</a>
+        <a class="nav-item active" href="create-session.html" aria-current="page">Create Session</a>
+        <a class="nav-item" href="queue.html">Waiting Queue</a>
+        <a class="nav-item" href="faculty-notifications.html">Notifications</a>
     </nav>
     <a class="nav-item" href="index.html">Logout</a>
   </aside>
   <main>
     <header class="topbar">
-      <div><h2>Create Session</h2><p class="muted">Open a consultation session for students.</p></div>
-      <div class="user"><span>Prof. Sharma</span><small>Faculty</small></div>
+      <div><h1>Create a Consultation Session</h1><p class="muted">Set the topic, time and capacity for students.</p></div>
+      <div class="user"><span><span data-user-name>Faculty Name</span></span><small>Faculty</small></div>
     </header>
-    <form class="card">
-      <h3>New session</h3>
-      <div class="row">
-        <div><label>Date</label><input type="date"></div>
-        <div><label>Start</label><input type="time" value="10:00"></div>
-        <div><label>End</label><input type="time" value="11:00"></div>
-        <div><label>Max students</label><input type="number" min="1" value="5"></div>
-        <div><button type="button" class="btn primary full">Create Session</button></div>
+    <p class="sample-note"><strong>Demo mode.</strong> Data is saved in this browser only, not on a server.</p>
+    <form class="card" id="sessionForm">
+      <div class="form-grid">
+        <div class="field wide">
+          <label for="topic">Consultation topic</label>
+          <input id="topic" name="topic" type="text" placeholder="e.g. PBL Project Review" required>
+        </div>
+        <div class="field wide">
+          <label for="desc">PBL project or discussion description</label>
+          <textarea id="desc" name="desc" placeholder="Describe what students can discuss in this session" required></textarea>
+        </div>
+        <div class="field">
+          <label for="date">Consultation date</label>
+          <input id="date" name="date" type="date" required>
+        </div>
+        <div class="field">
+          <label for="capacity">Maximum student capacity</label>
+          <input id="capacity" name="capacity" type="number" min="1" max="50" placeholder="e.g. 5" required>
+        </div>
+        <div class="field">
+          <label for="start">Start time</label>
+          <input id="start" name="start" type="time" required>
+        </div>
+        <div class="field">
+          <label for="end">End time</label>
+          <input id="end" name="end" type="time" required>
+        </div>
+      </div>
+      <p id="formMsg" class="form-msg" role="alert"></p>
+      <div class="form-actions">
+        <button type="submit" class="btn primary">Create Session</button>
+        <a class="btn" href="faculty-dashboard.html">Back to Dashboard</a>
       </div>
     </form>
-    <div class="card">
-      <h3>My Sessions</h3>
-        <div class="table-wrap"><table>
-          <tr><th>Date</th><th>Time</th><th>Booked</th><th>Waiting</th><th>Status</th></tr>
-          <tr><td>26 May 2025</td><td>10:00 - 11:00</td><td>3/5</td><td>3</td><td><span class="pill open">Open</span></td></tr>
-          <tr><td>27 May 2025</td><td>14:00 - 15:00</td><td>5/5</td><td>0</td><td><span class="pill closed">Closed</span></td></tr>
-        </table></div>
-    </div>
   </main>
 </div>
+<script src="script.js"></script>
 </body>
 </html>
