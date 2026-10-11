@@ -6,32 +6,48 @@
   <title>My Appointments - CampusSync</title>
   <link rel="stylesheet" href="style.css">
 </head>
-<body>
+<body data-role="student">
 <div class="app">
   <aside class="sidebar">
     <div class="brand">CampusSync</div>
-    <nav>
-      <a class="nav-item" href="student-dashboard.html">Dashboard</a>
-      <a class="nav-item" href="book.html">Book Consultation</a>
-      <a class="nav-item active" href="appointments.html">My Appointments</a>
-      <a class="nav-item" href="student-notifications.html">Notifications<span class="badge">2</span></a>
+    <div class="portal">Student Portal</div>
+    <nav aria-label="Main navigation">
+        <a class="nav-item" href="student-dashboard.html">Dashboard</a>
+        <a class="nav-item" href="book.html">Book Consultation</a>
+        <a class="nav-item active" href="appointments.html" aria-current="page">My Appointments</a>
+        <a class="nav-item" href="student-notifications.html">Notifications</a>
     </nav>
     <a class="nav-item" href="index.html">Logout</a>
   </aside>
   <main>
     <header class="topbar">
-      <div><h2>My Appointments</h2><p class="muted">Track your token and queue position.</p></div>
-      <div class="user"><span>Swastika Anand</span><small>Student</small></div>
+      <div><h1>My Appointments</h1><p class="muted">Track your tokens, queue positions and consultation status.</p></div>
+      <div class="user"><span><span data-user-name>Student Name</span></span><small>Student</small></div>
     </header>
-    <div class="card">
-        <div class="table-wrap"><table>
-          <tr><th>Token</th><th>Faculty</th><th>Date</th><th>Time</th><th>Queue Position</th><th>Status</th><th></th></tr>
-          <tr><td>#3</td><td>Prof. Sharma</td><td>26 May 2025</td><td>10:00 - 11:00</td><td>2</td><td><span class="pill waiting">Waiting</span></td><td><a class="btn small danger" href="#">Cancel</a></td></tr>
-          <tr><td>#1</td><td>Prof. Verma</td><td>24 May 2025</td><td>14:00 - 15:00</td><td>-</td><td><span class="pill completed">Completed</span></td><td></td></tr>
-          <tr><td>#2</td><td>Prof. Khan</td><td>22 May 2025</td><td>11:00 - 12:00</td><td>-</td><td><span class="pill cancelled">Cancelled</span></td><td></td></tr>
-        </table></div>
-    </div>
+    <p class="sample-note"><strong>Demo mode.</strong> Data is saved in this browser only, not on a server.</p>
+    <section class="card">
+      <div class="card-head"><h2>Upcoming Appointments</h2></div>
+      <div class="table-wrap">
+        <table class="responsive">
+          <caption class="sr-only">Upcoming appointments (sample data)</caption>
+          <thead><tr><th scope="col">Token</th><th scope="col">Faculty</th><th scope="col">Topic</th><th scope="col">Date & Time</th><th scope="col">Queue Position</th><th scope="col">Status</th></tr></thead>
+          <tbody id="upcomingAppts"></tbody>
+        </table>
+      </div>
+    </section>
+    <section class="card">
+      <div class="card-head"><h2>Previous Appointments</h2></div>
+      <div class="table-wrap">
+        <table class="responsive">
+          <caption class="sr-only">Previous appointments (sample data)</caption>
+          <thead><tr><th scope="col">Token</th><th scope="col">Faculty</th><th scope="col">Topic</th><th scope="col">Date & Time</th><th scope="col">Queue Position</th><th scope="col">Status</th></tr></thead>
+          <tbody id="previousAppts"></tbody>
+        </table>
+      </div>
+    </section>
+
   </main>
 </div>
+<script src="script.js"></script>
 </body>
 </html>
