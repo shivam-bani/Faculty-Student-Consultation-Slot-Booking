@@ -3,49 +3,63 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Book Consultation - CampusSync</title>
+  <title>Book a Faculty Consultation - CampusSync</title>
   <link rel="stylesheet" href="style.css">
 </head>
-<body>
+<body data-role="student">
 <div class="app">
   <aside class="sidebar">
     <div class="brand">CampusSync</div>
-    <nav>
-      <a class="nav-item" href="student-dashboard.html">Dashboard</a>
-      <a class="nav-item active" href="book.html">Book Consultation</a>
-      <a class="nav-item" href="appointments.html">My Appointments</a>
-      <a class="nav-item" href="student-notifications.html">Notifications<span class="badge">2</span></a>
+    <div class="portal">Student Portal</div>
+    <nav aria-label="Main navigation">
+        <a class="nav-item" href="student-dashboard.html">Dashboard</a>
+        <a class="nav-item active" href="book.html" aria-current="page">Book Consultation</a>
+        <a class="nav-item" href="appointments.html">My Appointments</a>
+        <a class="nav-item" href="student-notifications.html">Notifications</a>
     </nav>
     <a class="nav-item" href="index.html">Logout</a>
   </aside>
   <main>
     <header class="topbar">
-      <div><h2>Book Consultation</h2><p class="muted">Pick a faculty and a session.</p></div>
-      <div class="user"><span>Swastika Anand</span><small>Student</small></div>
+      <div><h1>Book a Faculty Consultation</h1><p class="muted">Choose a faculty member, a topic and a time slot.</p></div>
+      <div class="user"><span><span data-user-name>Student Name</span></span><small>Student</small></div>
     </header>
-    <div class="split">
-      <form class="card">
-        <div class="step">1. Select faculty</div>
-        <select>
-          <option>Prof. Sharma (Computer Science)</option>
-          <option>Prof. Verma (Operating Systems)</option>
-          <option>Prof. Khan (Web Technology)</option>
-        </select>
-        <div class="step">2. Select session</div>
-        <div class="slots">
-        <label class="slot"><input type="radio" name="slot"><span>26 May 2025 &nbsp; 10:00 - 11:00<span style="border:0;padding:0;cursor:inherit">2 seats left</span></span></label>
-        <label class="slot full"><input type="radio" name="slot" disabled><span>27 May 2025 &nbsp; 14:00 - 15:00<span style="border:0;padding:0;cursor:inherit">Full</span></span></label>
-        <label class="slot"><input type="radio" name="slot"><span>28 May 2025 &nbsp; 11:00 - 12:00<span style="border:0;padding:0;cursor:inherit">4 seats left</span></span></label>
+    <p class="sample-note"><strong>Demo mode.</strong> Data is saved in this browser only, not on a server.</p>
+    <form class="card" id="bookForm">
+      <div class="form-grid">
+        <div class="field">
+          <label for="faculty">Faculty name</label>
+          <select id="faculty" name="faculty" required></select>
         </div>
-        <button type="button" class="btn primary full">Book Appointment</button>
-      </form>
-      <div class="card">
-        <h3>Faculty Details</h3>
-        <p><b>Prof. Sharma</b></p>
-        <p class="muted">Computer Science</p>
+        <div class="field">
+          <label for="topic">PBL consultation topic</label>
+          <input id="topic" name="topic" type="text" placeholder="e.g. Project progress review" required>
+        </div>
+        <div class="field">
+          <label for="slot">Available time slot</label>
+          <select id="slot" name="slot" required><option value="">Choose a faculty first</option></select>
+        </div>
+        <div class="field">
+          <label for="date">Consultation date</label>
+          <input id="date" name="date" type="text" placeholder="Filled in when you choose a slot" readonly>
+        </div>
+        <div class="field wide">
+          <label for="capacity">Available capacity</label>
+          <input id="capacity" name="capacity" type="text" placeholder="Filled in when you choose a slot" readonly>
+        </div>
+        <div class="field wide">
+          <label for="desc">Description of the discussion (optional)</label>
+          <textarea id="desc" name="desc" placeholder="Briefly describe what you want to discuss"></textarea>
+        </div>
       </div>
-    </div>
+      <p id="formMsg" class="form-msg" role="alert"></p>
+      <div class="form-actions">
+        <button type="submit" class="btn primary">Book Consultation</button>
+        <a class="btn" href="student-dashboard.html">Back to Dashboard</a>
+      </div>
+    </form>
   </main>
 </div>
+<script src="script.js"></script>
 </body>
 </html>
