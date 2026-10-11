@@ -3,40 +3,46 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Welcome, Prof. Sharma! - CampusSync</title>
+  <title>Dashboard - CampusSync</title>
   <link rel="stylesheet" href="style.css">
 </head>
-<body>
+<body data-role="faculty">
 <div class="app">
   <aside class="sidebar">
     <div class="brand">CampusSync</div>
-    <nav>
-      <a class="nav-item active" href="faculty-dashboard.html">Dashboard</a>
-      <a class="nav-item" href="create-session.html">Create Session</a>
-      <a class="nav-item" href="queue.html">Waiting Queue</a>
-      <a class="nav-item" href="faculty-notifications.html">Notifications<span class="badge">2</span></a>
+    <div class="portal">Faculty Portal</div>
+    <nav aria-label="Main navigation">
+        <a class="nav-item active" href="faculty-dashboard.html" aria-current="page">Dashboard</a>
+        <a class="nav-item" href="create-session.html">Create Session</a>
+        <a class="nav-item" href="queue.html">Waiting Queue</a>
+        <a class="nav-item" href="faculty-notifications.html">Notifications</a>
     </nav>
     <a class="nav-item" href="index.html">Logout</a>
   </aside>
   <main>
     <header class="topbar">
-      <div><h2>Welcome, Prof. Sharma!</h2><p class="muted">Here's what's happening today.</p></div>
-      <div class="user"><span>Prof. Sharma</span><small>Faculty</small></div>
+      <div><h1>Welcome, <span data-user-name>Faculty Name</span>!</h1><p class="muted">Manage your consultation sessions and waiting students.</p></div>
+      <div class="user"><span><span data-user-name>Faculty Name</span></span><small>Faculty</small></div>
     </header>
-    <div class="stats">
-      <div class="stat"><span>My Sessions</span><b>2</b></div>
-      <div class="stat"><span>Students Waiting</span><b>3</b></div>
-      <div class="stat"><span>New Notifications</span><b>2</b></div>
-    </div>
-    <div class="card">
-      <h3>My Sessions</h3>
-        <div class="table-wrap"><table>
-          <tr><th>Date</th><th>Time</th><th>Booked</th><th>Waiting</th><th>Status</th></tr>
-          <tr><td>26 May 2025</td><td>10:00 - 11:00</td><td>3/5</td><td>3</td><td><span class="pill open">Open</span></td></tr>
-          <tr><td>27 May 2025</td><td>14:00 - 15:00</td><td>5/5</td><td>0</td><td><span class="pill closed">Closed</span></td></tr>
-        </table></div>
-    </div>
+    <p class="sample-note"><strong>Demo mode.</strong> Data is saved in this browser only, not on a server.</p>
+    <section class="stats" aria-label="Summary">
+      <div class="stat"><span>Today's Consultation Sessions</span><strong id="fStatToday">–</strong></div>
+      <div class="stat"><span>Total Bookings</span><strong id="fStatBookings">–</strong></div>
+      <div class="stat"><span>Waiting Students</span><strong id="fStatWaiting">–</strong></div>
+    </section>
+    <section class="card">
+      <div class="card-head"><h2>My Consultation Sessions</h2><div class="actions"><a class="btn primary small" href="create-session.html">Create Session</a><a class="btn small" href="queue.html">View Queue</a></div></div>
+      <div class="table-wrap">
+        <table class="responsive">
+          <caption class="sr-only">Consultation sessions (sample data)</caption>
+          <thead><tr><th scope="col">Topic</th><th scope="col">Date</th><th scope="col">Time</th><th scope="col">Booked Capacity</th><th scope="col">Status</th></tr></thead>
+          <tbody id="mySessions"></tbody>
+        </table>
+      </div>
+    </section>
+
   </main>
 </div>
+<script src="script.js"></script>
 </body>
 </html>
