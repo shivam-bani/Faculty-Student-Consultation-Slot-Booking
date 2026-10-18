@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>My Timetable - CampusSync</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body data-role="faculty">
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">CampusSync</div>
+    <div class="portal">Faculty Portal</div>
+    <nav aria-label="Main navigation">
+        <a class="nav-item" href="requests.html">Booking Requests</a>
+        <a class="nav-item active" href="timetable.html" aria-current="page">My Timetable</a>
+        <a class="nav-item" href="faculty-calendar.html">Calendar</a>
+        <a class="nav-item" href="faculty-notifications.html">Notifications</a>
+    </nav>
+    <a class="nav-item" href="index.html">Logout</a>
+  </aside>
+  <main>
+    <header class="topbar">
+      <div><h1>My Timetable</h1><p class="muted">Your classes and the free periods students can request. The admin keeps this timetable up to date.</p></div>
+      <div class="user"><span><span data-user-name>Faculty Name</span></span><small>Faculty</small></div>
+    </header>
+    <section class="card" id="ttView">
+      <h2>My weekly timetable</h2>
+      <p id="ttSummary" class="muted"></p>
+      <p id="ttSubjects" class="muted"></p>
+      <ul class="legend" aria-label="Legend"><li><span class="key class"></span>Class</li><li><span class="key busy"></span>Busy (duty, meeting)</li><li><span class="key free"></span>Open for student requests</li><li><span class="key custom"></span>Extra consultation hours</li></ul>
+      <div id="weekGrid" class="week"></div>
+      <p class="muted note-after">Something wrong or missing? Ask the admin to update your timetable. Changes appear here and for students immediately.</p>
+    </section>
+  </main>
+</div>
+<script src="timetable-data.js"></script>
+<script src="script.js"></script>
+</body>
+</html>

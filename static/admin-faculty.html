@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Faculty - CampusSync</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body data-role="admin">
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">CampusSync</div>
+    <div class="portal">Admin Portal</div>
+    <nav aria-label="Main navigation">
+        <a class="nav-item active" href="admin-faculty.html" aria-current="page">Faculty</a>
+        <a class="nav-item" href="admin-timetable.html">Timetables</a>
+        <a class="nav-item" href="admin-account.html">Account</a>
+    </nav>
+    <a class="nav-item" href="index.html">Logout</a>
+  </aside>
+  <main>
+    <header class="topbar">
+      <div><h1>Faculty</h1><p class="muted">Faculty accounts are created from the university timetable, so each account gets the right classes.</p></div>
+      <div class="user"><span><span data-user-name>Admin Name</span></span><small>Admin</small></div>
+    </header>
+    <p id="formMsg" class="form-msg" role="alert"></p>
+    <section class="card">
+      <h2>Faculty accounts</h2>
+      <p class="muted">Faculty log in with the email and temporary password you set here, using "Login as Faculty".</p>
+      <div class="table-wrap">
+        <table class="responsive">
+          <caption class="sr-only">Faculty accounts</caption>
+          <thead><tr><th scope="col">Name</th><th scope="col">Email</th><th scope="col">Timetable</th><th scope="col">Open requests</th><th scope="col">Actions</th></tr></thead>
+          <tbody id="facultyRows"></tbody>
+        </table>
+      </div>
+    </section>
+    <section class="card">
+      <div class="card-head"><h2>Faculty in the university timetable</h2>
+        <div class="inline-field grow"><label for="ttSearch">Search</label><input id="ttSearch" type="search" placeholder="Name or subject code, e.g. Negi or TCS-502"></div></div>
+      <p id="ttCount" class="muted"></p>
+      <div class="table-wrap">
+        <table class="responsive">
+          <caption class="sr-only">Faculty in the university timetable</caption>
+          <thead><tr><th scope="col">Name</th><th scope="col">Subjects</th><th scope="col">Sections</th><th scope="col">Classes</th><th scope="col">Account</th></tr></thead>
+          <tbody id="ttRows"></tbody>
+        </table>
+      </div>
+    </section>
+    <form class="card" id="addFacultyForm">
+      <h2>Add faculty who are not in the timetable</h2>
+      <p class="muted">If the name matches someone in the timetable, the account is linked to their classes automatically. Otherwise it starts empty and you enter the classes under Timetables.</p>
+      <div class="form-grid">
+        <div class="field wide">
+          <label for="name">Full name</label>
+          <input id="name" name="name" type="text" required>
+        </div>
+        <div class="field">
+          <label for="email">College email</label>
+          <input id="email" name="email" type="email" placeholder="name@geu.ac.in" required>
+        </div>
+        <div class="field">
+          <label for="password">Temporary password</label>
+          <input id="password" name="password" type="text" minlength="8" placeholder="At least 8 characters" required>
+        </div>
+      </div>
+      <button type="submit" class="btn primary">Add faculty</button>
+    </form>
+  </main>
+</div>
+<script src="timetable-data.js"></script>
+<script src="script.js"></script>
+</body>
+</html>

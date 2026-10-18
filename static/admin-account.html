@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Account - CampusSync</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body data-role="admin">
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">CampusSync</div>
+    <div class="portal">Admin Portal</div>
+    <nav aria-label="Main navigation">
+        <a class="nav-item" href="admin-faculty.html">Faculty</a>
+        <a class="nav-item" href="admin-timetable.html">Timetables</a>
+        <a class="nav-item active" href="admin-account.html" aria-current="page">Account</a>
+    </nav>
+    <a class="nav-item" href="index.html">Logout</a>
+  </aside>
+  <main>
+    <header class="topbar">
+      <div><h1>Account</h1><p class="muted">Your account details and password.</p></div>
+      <div class="user"><span><span data-user-name>Admin Name</span></span><small>Admin</small></div>
+    </header>
+    <section class="card">
+      <h2>Account details</h2>
+      <dl class="details">
+        <div><dt>Name</dt><dd data-user-name>Admin Name</dd></div>
+        <div><dt>Email</dt><dd id="accEmail">-</dd></div>
+        <div><dt>Role</dt><dd>Admin</dd></div>
+      </dl>
+    </section>
+    <form class="card" id="pwForm">
+      <h2>Change your password</h2>
+      <p id="formMsg" class="form-msg" role="alert"></p>
+      <div class="form-grid">
+        <div class="field wide"><label for="current">Current password</label><input id="current" name="current" type="password" autocomplete="current-password" required></div>
+        <div class="field"><label for="next">New password</label><input id="next" name="next" type="password" minlength="8" autocomplete="new-password" required></div>
+        <div class="field"><label for="confirm">Confirm new password</label><input id="confirm" name="confirm" type="password" minlength="8" autocomplete="new-password" required></div>
+      </div>
+      <button type="submit" class="btn primary">Change password</button>
+    </form>
+  </main>
+</div>
+<script src="timetable-data.js"></script>
+<script src="script.js"></script>
+</body>
+</html>
