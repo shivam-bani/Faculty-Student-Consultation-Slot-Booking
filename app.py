@@ -1,14 +1,18 @@
 """CampusSync backend (Flask).
 
-Step 1: serve the existing frontend from static/ and expose a health check.
+Serves the frontend from static/ and the JSON API under /api/.
 Run with:  python app.py   then open http://127.0.0.1:5000/
 """
+import mysql.connector
 from flask import Flask, jsonify
+
+import db
 
 # static_url_path="" serves static/index.html at /index.html (not /static/index.html),
 # so the pages' relative links (style.css, script.js, book.html, ...) keep working unchanged.
 # Only files inside static/ are served: app.py, .env and the rest of the project are not reachable.
 app = Flask(__name__, static_folder="static", static_url_path="")
+db.init_app(app)
 
 
 @app.get("/")
@@ -21,6 +25,20 @@ def home():
 def health():
     # A tiny endpoint that proves the server is running and returns JSON.
     return jsonify(ok=True)
+
+
+@app.get("/api/health/db")
+def health_db():
+    # Proves the app can log in to MySQL with the .env settings and run a query.
+    try:
+        cur = db.get_db().cursor()
+        cur.execute("SELECT DATABASE()")
+        database = cur.fetchone()[0]
+    except mysql.connector.Error:
+        # The details go to the server console only; the browser gets a short message.
+        app.logger.exception("Database health check failed")
+        return jsonify(ok=False, error="Database unavailable"), 503
+    return jsonify(ok=True, database=database)
 
 
 if __name__ == "__main__":
