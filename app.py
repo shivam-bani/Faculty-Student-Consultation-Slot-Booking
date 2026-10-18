@@ -6,6 +6,7 @@ Run with:  python app.py   then open http://127.0.0.1:5000/
 import mysql.connector
 from flask import Flask, jsonify
 
+import commands
 import db
 
 # static_url_path="" serves static/index.html at /index.html (not /static/index.html),
@@ -13,6 +14,7 @@ import db
 # Only files inside static/ are served: app.py, .env and the rest of the project are not reachable.
 app = Flask(__name__, static_folder="static", static_url_path="")
 db.init_app(app)
+commands.init_app(app)
 
 
 @app.get("/")
