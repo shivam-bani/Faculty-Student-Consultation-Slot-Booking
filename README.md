@@ -1,6 +1,29 @@
 # CampusSync
 
-Open `index.html` in a browser (or run `python -m http.server` in this folder).
+## Setup (Windows, once)
+Needs Python 3.14 and MySQL Server 8.4 (running as a Windows service). In PowerShell 7, in this folder:
+
+```
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+python tools/setup_db.py                   # asks for the MySQL root password; creates the database, the app user and .env
+flask --app app import-timetable           # loads the 101 faculty timetables into MySQL
+flask --app app create-admin               # asks for the admin's name, email and password
+```
+
+`.env` holds the database password and the secret key. It is created by `tools/setup_db.py`
+and must never be committed or shared.
+
+## Run
+```
+.\.venv\Scripts\Activate.ps1
+python app.py
+```
+Then open http://127.0.0.1:5000/. Tests: `python -m unittest discover -s tests -v` (needs MySQL running).
+
+The backend is being connected step by step. Until login moves to the server, the pages still
+keep their data in the browser and use the demo logins below.
 
 ## Logging in
 - **Admin:** `admin@campussync.edu` / `Admin@1234` (created automatically). Click **Login as Admin**,
@@ -38,7 +61,10 @@ Status flow: Pending -> Accepted -> Completed (automatically after the meeting t
 or Rejected / Cancelled, or Expired (never answered before the meeting time).
 
 ## Files
-- `timetable-data.js`: imported faculty schedules (contact numbers deliberately excluded).
+- `static/`: the pages, `style.css`, `script.js` and `timetable-data.js`, served by Flask.
+- `app.py` (Flask app and API), `db.py` (MySQL connection), `commands.py` (`flask` commands),
+  `schema.sql` (tables and constraints), `tools/setup_db.py` (database setup), `tests/`.
+- `static/timetable-data.js`: imported faculty schedules (contact numbers deliberately excluded).
   The admin's edits are stored separately, so this file is only the starting point.
 - `tools/build_timetable_data.py`: rebuilds it when a new timetable is published.
 - `tools/verify_timetable_data.py`: checks the data against the source files
