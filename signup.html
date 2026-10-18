@@ -15,7 +15,7 @@
   </section>
   <form class="auth-card" id="signupForm">
     <h2>Create an account</h2>
-    <p class="muted">Create your CampusSync account.</p>
+    <p class="muted">Create your student account.</p>
     <div>
       <label for="name">Full name</label>
       <input id="name" name="name" type="text" placeholder="Your full name" required>
@@ -32,18 +32,13 @@
       <label for="confirm">Confirm password</label>
       <input id="confirm" name="confirm" type="password" minlength="8" placeholder="Re-enter your password" required>
     </div>
-    <fieldset>
-      <legend>I am a</legend>
-      <div class="radio-row">
-        <label><input type="radio" name="role" value="student" required> Student</label>
-        <label><input type="radio" name="role" value="faculty"> Faculty</label>
-      </div>
-    </fieldset>
+    <p class="muted">Faculty accounts are created by the admin, so faculty do not need to sign up.</p>
     <p id="formMsg" class="form-msg" role="alert"></p>
     <button type="submit" class="btn primary full">Register</button>
     <p class="auth-link">Already have an account? <a href="index.html">Back to Login</a></p>
   </form>
 </main>
+<script src="timetable-data.js"></script>
 <script src="script.js"></script>
 </body>
 </html>
