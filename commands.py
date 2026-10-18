@@ -1,12 +1,16 @@
 """Command-line tasks for CampusSync. Run from the project folder with the venv active:
 
     flask --app app import-timetable    load static/timetable-data.js into MySQL
+    flask --app app create-admin        create an admin account (asks for the password)
 """
 import json
 import re
 from pathlib import Path
 
 import click
+import mysql.connector
+from flask.cli import with_appcontext
+from werkzeug.security import generate_password_hash
 
 import db
 
@@ -22,6 +26,7 @@ def load_timetable(path=TIMETABLE_FILE):
 
 
 @click.command("import-timetable")
+@with_appcontext
 def import_timetable():
     """Load the university timetable into MySQL.
 
@@ -61,5 +66,32 @@ def import_timetable():
     click.echo(f"Database now has {profiles} timetable profiles and {classes} classes.")
 
 
+@click.command("create-admin")
+@with_appcontext
+@click.option("--name", prompt="Admin name", default="CampusSync Admin")
+@click.option("--email", prompt="Admin email")
+def create_admin(name, email):
+    """Create an admin account. The password is typed twice, hidden, and only its hash is stored."""
+    name, email = name.strip(), email.strip().lower()
+    if not name or "@" not in email:
+        raise click.ClickException("Enter a name and a valid email address.")
+    password = click.prompt("Password (hidden, at least 8 characters)", hide_input=True,
+                            confirmation_prompt="Repeat password")
+    if len(password) < 8:
+        raise click.ClickException("The password needs at least 8 characters.")
+    conn = db.get_db()
+    try:
+        conn.cursor().execute(
+            "INSERT INTO users (name, email, password_hash, role) VALUES (%s, %s, %s, 'admin')",
+            (name, email, generate_password_hash(password)))
+    except mysql.connector.IntegrityError as e:
+        if e.errno == 1062:  # duplicate key: uq_users_email
+            raise click.ClickException(f"An account with {email} already exists.")
+        raise
+    conn.commit()
+    click.echo(f"Admin account created for {email}.")
+
+
 def init_app(app):
     app.cli.add_command(import_timetable)
+    app.cli.add_command(create_admin)
