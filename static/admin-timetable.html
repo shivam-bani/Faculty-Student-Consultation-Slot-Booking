@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Timetables - CampusSync</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body data-role="admin">
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">CampusSync</div>
+    <div class="portal">Admin Portal</div>
+    <nav aria-label="Main navigation">
+        <a class="nav-item" href="admin-faculty.html">Faculty</a>
+        <a class="nav-item active" href="admin-timetable.html" aria-current="page">Timetables</a>
+        <a class="nav-item" href="admin-account.html">Account</a>
+    </nav>
+    <a class="nav-item" href="index.html">Logout</a>
+  </aside>
+  <main>
+    <header class="topbar">
+      <div><h1>Timetables</h1><p class="muted">Enter and change each faculty member's timetable. Free time between classes is offered to students automatically.</p></div>
+      <div class="user"><span><span data-user-name>Admin Name</span></span><small>Admin</small></div>
+    </header>
+    <p id="formMsg" class="form-msg" role="alert"></p>
+    <section class="card">
+      <div class="card-head">
+        <div class="inline-field grow"><label for="admFaculty">Faculty</label><select id="admFaculty"></select></div>
+        <div class="actions"><button type="button" id="offerAll" class="btn small">Offer all free slots</button><button type="button" id="restoreTT" class="btn small">Restore imported timetable</button></div>
+      </div>
+      <p id="ttSummary" class="muted"></p>
+      <p id="clashNote" class="form-msg"></p>
+      <ul class="legend" aria-label="Legend"><li><span class="key class"></span>Class (select to edit or remove)</li><li><span class="key busy"></span>Busy</li><li><span class="key free"></span>Offered to students</li><li><span class="key off"></span>Not offered</li><li><span class="key custom"></span>Extra consultation hours</li></ul>
+      <p class="muted">Select a free slot to stop or start offering it.</p>
+      <div id="weekGrid" class="week"></div>
+    </section>
+    <form class="card" id="entryForm">
+      <h2>Add to the timetable</h2>
+      <div class="form-grid">
+        <div class="field">
+          <label for="type">Type</label>
+          <select id="type" name="type">
+            <option value="class">Class</option>
+            <option value="busy">Busy period (duty, meeting, leave)</option>
+            <option value="consult">Extra consultation hours</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="day">Day</label>
+          <select id="day" name="day">
+            <option value="1">Monday</option><option value="2">Tuesday</option><option value="3">Wednesday</option>
+            <option value="4">Thursday</option><option value="5">Friday</option><option value="6">Saturday</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="start">Start time</label>
+          <input id="start" name="start" type="time" required>
+        </div>
+        <div class="field">
+          <label for="end">End time</label>
+          <input id="end" name="end" type="time" required>
+        </div>
+        <div class="field for-class">
+          <label for="code">Subject code</label>
+          <input id="code" name="code" type="text" placeholder="e.g. TCS-502 (not needed for busy)">
+        </div>
+        <div class="field for-class">
+          <label for="subject">Subject or reason</label>
+          <input id="subject" name="subject" type="text" placeholder="e.g. Operating Systems">
+        </div>
+        <div class="field for-class">
+          <label for="section">Section</label>
+          <input id="section" name="section" type="text" placeholder="e.g. B.Tech CSE V-A">
+        </div>
+        <div class="field for-class">
+          <label for="room">Room</label>
+          <input id="room" name="room" type="text" placeholder="e.g. LT-6">
+        </div>
+        <div class="field for-consult" hidden>
+          <label for="capacity">Students per slot</label>
+          <input id="capacity" name="capacity" type="number" min="1" max="50" value="5">
+        </div>
+      </div>
+      <button type="submit" class="btn primary">Add to timetable</button>
+    </form>
+    <form class="card" id="slotSettings">
+      <h2>Consultation slot settings</h2>
+      <div class="form-grid">
+        <div class="field">
+          <label for="slotLen">Length of each slot</label>
+          <select id="slotLen" name="slotLen">
+            <option value="15">15 minutes</option><option value="20">20 minutes</option><option value="30">30 minutes</option>
+            <option value="45">45 minutes</option><option value="55">55 minutes (one period)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="defCap">Students per slot</label>
+          <input id="defCap" name="defCap" type="number" min="1" max="50" value="3" required>
+        </div>
+        <fieldset class="field wide">
+          <legend>Consultation days</legend>
+          <div class="radio-row checks">
+            <label><input type="checkbox" name="days" value="1"> Mon</label><label><input type="checkbox" name="days" value="2"> Tue</label>
+            <label><input type="checkbox" name="days" value="3"> Wed</label><label><input type="checkbox" name="days" value="4"> Thu</label>
+            <label><input type="checkbox" name="days" value="5"> Fri</label><label><input type="checkbox" name="days" value="6"> Sat</label>
+          </div>
+        </fieldset>
+      </div>
+      <button type="submit" class="btn primary">Save settings</button>
+    </form>
+  </main>
+</div>
+<script src="timetable-data.js"></script>
+<script src="script.js"></script>
+</body>
+</html>
