@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Calendar - CampusSync</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body data-role="faculty">
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">CampusSync</div>
+    <div class="portal">Faculty Portal</div>
+    <nav aria-label="Main navigation">
+        <a class="nav-item" href="requests.html">Booking Requests</a>
+        <a class="nav-item" href="timetable.html">My Timetable</a>
+        <a class="nav-item active" href="faculty-calendar.html" aria-current="page">Calendar</a>
+        <a class="nav-item" href="faculty-notifications.html">Notifications</a>
+    </nav>
+    <a class="nav-item" href="index.html">Logout</a>
+  </aside>
+  <main>
+    <header class="topbar">
+      <div><h1>Calendar</h1><p class="muted">Your consultation meetings by date.</p></div>
+      <div class="user"><span><span data-user-name>Faculty Name</span></span><small>Faculty</small></div>
+    </header>
+    <section class="card">
+      <div class="cal-bar">
+        <button type="button" id="calPrev" class="btn small">&larr; Previous</button>
+        <h2 id="calTitle">Month</h2>
+        <button type="button" id="calNext" class="btn small">Next &rarr;</button>
+      </div>
+      <div id="calGrid" class="calendar"></div>
+      <p class="muted cal-hint">Select a date to see only that day's meetings.</p>
+    </section>
+    <section class="card">
+      <h2 id="calListTitle">Meetings this month</h2>
+      <ul id="calList" class="cal-list"></ul>
+    </section>
+  </main>
+</div>
+<script src="timetable-data.js"></script>
+<script src="script.js"></script>
+</body>
+</html>
