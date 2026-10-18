@@ -1,0 +1,18 @@
+# Secrets: database passwords and the Flask SECRET_KEY live here. Never commit them.
+.env
+.env.*
+!.env.example
+
+# Python virtual environment and caches
+.venv/
+__pycache__/
+*.py[cod]
+
+# Logs
+*.log
+
+# Editor / OS files
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
