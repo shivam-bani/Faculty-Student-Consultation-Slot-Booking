@@ -134,3 +134,22 @@ def logout():
 @login_required()
 def me():
     return jsonify(ok=True, user=current_user())
+
+
+@bp.post("/password")
+@login_required()
+def change_password():
+    data = json_body()
+    current, new = str(data.get("current", "")), str(data.get("new", ""))
+    if not MIN_PASSWORD <= len(new) <= MAX_PASSWORD:
+        return error(f"Use {MIN_PASSWORD} to {MAX_PASSWORD} characters for the new password.", 400)
+
+    conn = db.get_db()
+    cur = conn.cursor()
+    user_id = current_user()["id"]
+    cur.execute("SELECT password_hash FROM users WHERE id = %s", (user_id,))
+    if not check_password_hash(cur.fetchone()[0], current):
+        return error("Current password is wrong.", 400)
+    cur.execute("UPDATE users SET password_hash = %s WHERE id = %s", (generate_password_hash(new), user_id))
+    conn.commit()
+    return jsonify(ok=True)

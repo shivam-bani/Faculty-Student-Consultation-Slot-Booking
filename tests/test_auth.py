@@ -131,6 +131,35 @@ class SignupTests(AuthTestCase):
         self.assertEqual(r.get_json()["user"]["role"], "student")
 
 
+class ChangePasswordTests(AuthTestCase):
+    NEW = "Brand-New-Pass-456"
+
+    def change(self, current=PASSWORD, new=NEW):
+        return self.client.post("/api/auth/password", json={"current": current, "new": new})
+
+    def test_change_then_login_with_the_new_password(self):
+        self.login()
+        self.assertEqual(self.change().status_code, 200)
+        self.client.post("/api/auth/logout", json={})
+        self.assertEqual(self.login(password=PASSWORD).status_code, 401)
+        self.assertEqual(self.login(password=self.NEW).status_code, 200)
+
+    def test_needs_login(self):
+        self.assertEqual(self.change().status_code, 401)
+
+    def test_wrong_current_password(self):
+        self.login()
+        r = self.change(current="wrong-password")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("Current password is wrong", r.get_json()["error"])
+        self.client.post("/api/auth/logout", json={})
+        self.assertEqual(self.login(password=PASSWORD).status_code, 200)  # unchanged
+
+    def test_new_password_too_short(self):
+        self.login()
+        self.assertEqual(self.change(new="short").status_code, 400)
+
+
 class SessionTests(AuthTestCase):
     def test_role_always_comes_from_the_database(self):
         self.login()
