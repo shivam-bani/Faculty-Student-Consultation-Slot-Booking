@@ -40,21 +40,18 @@ function showMessage(text, ok) {
 const homeFor = role => ({ student: "student-dashboard.html", faculty: "requests.html", admin: "admin-faculty.html" }[role]);
 const signupForm = document.getElementById("signupForm");
 if (signupForm) {
-  signupForm.addEventListener("submit", function (e) {
+  signupForm.addEventListener("submit", async function (e) {
     e.preventDefault();
-    const name = signupForm.name.value.trim();
-    const email = signupForm.email.value.trim().toLowerCase();
     const password = signupForm.password.value;
-
     if (password !== signupForm.confirm.value) {
       return showMessage("Passwords do not match.", false);
     }
-    const users = getUsers();
-    if (users.some(u => u.email === email)) {
-      return showMessage("This email is already registered. Please log in.", false);
+    try {
+      // The server checks the @geu.ac.in email, the password length and duplicates, and stores a hash.
+      await api("/auth/signup", { name: signupForm.name.value, email: signupForm.email.value, password });
+    } catch (err) {
+      return showMessage(err.message, false);
     }
-    users.push({ name, email, password, role: "student" });
-    localStorage.setItem(USERS_KEY, JSON.stringify(users));
     showMessage("Account created. Redirecting to login...", true);
     setTimeout(() => { window.location.href = "index.html"; }, 1200);
   });
