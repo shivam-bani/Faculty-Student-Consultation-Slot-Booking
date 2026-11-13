@@ -117,5 +117,55 @@ class CreateFacultyTests(FacultyTestCase):
         self.client_for("unittest-fac@geu.ac.in", "Another-Pass-456")
 
 
+class ManageFacultyTests(FacultyTestCase):
+    def setUp(self):
+        super().setUp()
+        self.fid = self.create().get_json()["faculty"]["id"]
+
+    def post(self, action, body=None, client=None):
+        return (client or self.admin).post(f"/api/admin/faculty/{self.fid}/{action}", json=body or {})
+
+    def test_link_another_timetable(self):
+        r = self.post("link", {"profile_id": "unittest-prof-b"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.get_json()["faculty"]["profile_id"], "unittest-prof-b")
+
+    def test_cannot_link_a_timetable_that_is_taken(self):
+        self.create(email="unittest-other@geu.ac.in", profile_id="unittest-prof-b")
+        r = self.post("link", {"profile_id": "unittest-prof-b"})
+        self.assertEqual(r.status_code, 409)
+        self.assertIn("unittest-other@geu.ac.in", r.get_json()["error"])
+
+    def test_cannot_link_a_missing_timetable(self):
+        self.assertEqual(self.post("link", {"profile_id": "unittest-does-not-exist"}).status_code, 400)
+
+    def test_reset_password(self):
+        self.assertEqual(self.post("password", {"password": "Reset-Pass-789"}).status_code, 200)
+        self.client_for("unittest-fac@geu.ac.in", "Reset-Pass-789")
+        self.assertEqual(self.post("password", {"password": "short"}).status_code, 400)
+
+    def test_deactivate(self):
+        faculty_client = self.client_for("unittest-fac@geu.ac.in")
+        self.assertEqual(self.post("deactivate").status_code, 200)
+        self.assertEqual(faculty_client.get("/api/auth/me").status_code, 401)  # logged out at once
+        listed = [f["id"] for f in self.admin.get("/api/faculty").get_json()["faculty"]]
+        self.assertNotIn(self.fid, listed)
+        self.assertEqual(query_one("SELECT is_active FROM users WHERE id = %s", (self.fid,))[0], 0)  # row kept
+        self.assertIsNone(query_one("SELECT profile_id FROM faculty_settings WHERE faculty_id = %s", (self.fid,))[0])
+        self.assertEqual(self.create(email="unittest-new@geu.ac.in").status_code, 201)  # timetable is free again
+
+    def test_unknown_or_removed_faculty(self):
+        self.post("deactivate")
+        for action in ("link", "password", "deactivate"):
+            with self.subTest(action=action):
+                self.assertEqual(self.post(action, {"profile_id": "unittest-prof-b", "password": PASSWORD}).status_code, 404)
+
+    def test_only_admins(self):
+        student = self.client_for("unittest-student@geu.ac.in")
+        for action in ("link", "password", "deactivate"):
+            with self.subTest(action=action):
+                self.assertEqual(self.post(action, client=student).status_code, 403)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -2,11 +2,14 @@
 
     GET  /api/faculty                          active faculty with their linked timetable
     POST /api/admin/faculty                    create (or re-activate) a faculty account
+    POST /api/admin/faculty/<id>/link          link the account to another timetable
+    POST /api/admin/faculty/<id>/password      set a new temporary password
+    POST /api/admin/faculty/<id>/deactivate    remove from CampusSync (history is kept)
 """
 import re
 
 import mysql.connector
-from flask import Blueprint, jsonify, make_response
+from flask import Blueprint, abort, jsonify, make_response
 from werkzeug.security import generate_password_hash
 
 import db
@@ -102,3 +105,66 @@ def create_faculty():
 
     cur.execute(FACULTY_QUERY + " AND u.id = %s", (fid,))
     return make_response(jsonify(ok=True, faculty=faculty_json(cur.fetchone())), 201)
+
+
+def active_faculty_or_404(cur, fid):
+    cur.execute(FACULTY_QUERY + " AND u.id = %s FOR UPDATE", (fid,))
+    row = cur.fetchone()
+    if row is None:
+        abort(error("Faculty account not found.", 404))
+    return row
+
+
+@bp.post("/admin/faculty/<int:fid>/link")
+@login_required("admin")
+def link_timetable(fid):
+    profile_id = str(json_body().get("profile_id", "")).strip()
+    conn = db.get_db()
+    cur = conn.cursor()
+    own_email = active_faculty_or_404(cur, fid)[2]
+    cur.execute("SELECT 1 FROM timetable_profiles WHERE id = %s", (profile_id,))
+    if cur.fetchone() is None:
+        return error("Choose a timetable from the list.", 400)
+    holder = profile_holder(cur, profile_id)
+    if holder and holder != own_email:
+        conn.rollback()
+        return error(f"That timetable is already linked to {holder}.", 409)
+    try:
+        cur.execute("UPDATE faculty_settings SET profile_id = %s WHERE faculty_id = %s", (profile_id, fid))
+    except mysql.connector.IntegrityError as e:
+        conn.rollback()
+        if e.errno == 1062:
+            return error("That timetable was just linked to someone else. Refresh and try again.", 409)
+        raise
+    conn.commit()
+    cur.execute(FACULTY_QUERY + " AND u.id = %s", (fid,))
+    return jsonify(ok=True, faculty=faculty_json(cur.fetchone()))
+
+
+@bp.post("/admin/faculty/<int:fid>/password")
+@login_required("admin")
+def reset_password(fid):
+    password = str(json_body().get("password", ""))
+    if not MIN_PASSWORD <= len(password) <= MAX_PASSWORD:
+        return error(f"Use {MIN_PASSWORD} to {MAX_PASSWORD} characters.", 400)
+    conn = db.get_db()
+    cur = conn.cursor()
+    active_faculty_or_404(cur, fid)
+    cur.execute("UPDATE users SET password_hash = %s WHERE id = %s", (generate_password_hash(password), fid))
+    conn.commit()
+    return jsonify(ok=True)
+
+
+@bp.post("/admin/faculty/<int:fid>/deactivate")
+@login_required("admin")
+def deactivate(fid):
+    """Removes the faculty member from CampusSync but keeps the account row, so their past
+    sessions and bookings still show who they were with. The timetable is freed for a new account."""
+    json_body()
+    conn = db.get_db()
+    cur = conn.cursor()
+    active_faculty_or_404(cur, fid)
+    cur.execute("UPDATE users SET is_active = FALSE WHERE id = %s", (fid,))
+    cur.execute("UPDATE faculty_settings SET profile_id = NULL WHERE faculty_id = %s", (fid,))
+    conn.commit()
+    return jsonify(ok=True)
