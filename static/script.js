@@ -205,27 +205,28 @@ async function createFacultyAccount(name, email, password, ttId) {   // returns 
   } catch (err) {
     return err.message;
   }
-  const st = ttStore();
-  if (!st[ttId]) { st[ttId] = { name, classes: [], edited: true }; save(TTS, st); }
-  await syncFaculty();
+  await syncFromServer();
   notify(email, "Welcome to CampusSync", "Your faculty account was created by the admin. Student requests for your free periods appear under Booking Requests.");
   return "";
 }
 
-// Faculty accounts live on the server. This copies the list (and each account's timetable link)
-// into the browser's cache, which the pages not yet connected to the server (booking, slots,
-// timetables) still read. It runs on every page load, so the server stays the source of truth.
-// It also strips passwords that older browser-only versions stored in the cache.
-async function syncFaculty() {
-  const { faculty } = await api("/faculty");
+// Faculty accounts, timetables and consultation settings live on the server. This copies them into
+// the browser's cache, which the pages still read for drawing and for the bookings that are kept in
+// the browser for now. It runs on every page load and after every admin change, so the server stays
+// the source of truth. It also strips passwords that older browser-only versions stored in the cache.
+async function syncFromServer() {
+  const [{ timetables }, { faculty }] = await Promise.all([api("/timetables"), api("/faculty")]);
+  const st = {};
+  timetables.forEach(t => { st[t.id] = { name: t.name, edited: t.edited, classes: t.classes }; });
+  save(TTS, st);
+  if (typeof TIMETABLE !== "undefined") localStorage.setItem(TTS + "_version", TIMETABLE.version || "1");  // ttStore() must not reload the file over it
   const users = getUsers().filter(u => u.role === "student").map(({ password, ...u }) => u);
-  const st = ttStore();
   faculty.forEach(f => {
     users.push({ id: f.id, name: f.name, email: f.email, role: "faculty" });
-    setAvail(f.email, { ...getAvail(f.email), ttId: f.profile_id || "" });
-    if (f.profile_id && !st[f.profile_id]) st[f.profile_id] = { name: f.profile_name || f.name, classes: [], edited: true };
+    const s = f.settings || { slot_len: 30, capacity: 3, days: [1, 2, 3, 4, 5], off: [], custom: [] };
+    setAvail(f.email, { ttId: f.profile_id || "", slotLen: s.slot_len, capacity: s.capacity, days: s.days,
+      off: Object.fromEntries(s.off.map(key => [key, true])), custom: s.custom });
   });
-  save(TTS, st);
   localStorage.setItem(USERS_KEY, JSON.stringify(users));
 }
 const ttFaculty = id => (id && ttStore()[id]) || null;
@@ -685,9 +686,9 @@ function adminFacultyPage(me) {
       openDialog({ title: `Link ${u.name} to a timetable`, confirm: "Save link",
         body: `<div class="field"><label for="dLink">Name in the university timetable</label><select id="dLink" name="link">${opts}</select></div>`,
         onConfirm: async f => {
+          // The server also clears the "not offered" marks, which belonged to the old timetable.
           try { await api(`/admin/faculty/${u.id}/link`, { profile_id: f.link.value }); } catch (err) { return err.message; }
-          setAvail(u.email, { ...getAvail(u.email), ttId: f.link.value, off: {} });
-          await syncFaculty();
+          await syncFromServer();
           timetableChanged(u.email, "linked your account to the timetable of " + ttFaculty(f.link.value).name);
           showMessage(`${u.name} now uses the timetable of ${ttFaculty(f.link.value).name}.`, true); draw(); return "";
         } });
@@ -711,7 +712,7 @@ function adminFacultyPage(me) {
             updateBooking(bk.id, x => { x.status = "Cancelled"; x.reschedule = null; logB(x, "Cancelled: faculty account removed by admin"); });
             notify(bk.studentEmail, "Booking cancelled", `${s.facultyName} is no longer available on CampusSync, so your meeting on ${whenText(s)} was cancelled. Please book another faculty member.`); });
           const av = loadObj(AVAIL); delete av[u.email]; save(AVAIL, av);
-          await syncFaculty();
+          await syncFromServer();
           showMessage(`${u.name} removed. ${open.length} booking(s) cancelled.`, true); draw(); return "";
         } });
     }
@@ -738,19 +739,19 @@ function adminTimetablePage(me) {
   const want = new URLSearchParams(location.search).get("f");
   if (want && list.some(u => u.email === want)) pick.value = want;
   const email = () => pick.value;
-  const profileId = () => {                            // make sure the account has a timetable to edit
-    const a = getAvail(email());
-    if (a.ttId && ttFaculty(a.ttId)) return a.ttId;
-    const u = getUsers().find(x => x.email === email()), st = ttStore();
-    const id = guessTtId(u.name) || (nameKey(u.name) + "-" + Date.now().toString(36));
-    if (!st[id]) { st[id] = { name: u.name, classes: [] }; save(TTS, st); }
-    setAvail(email(), { ...a, ttId: id }); return id;
+  const facultyId = () => (facultyUsers().find(u => u.email === email()) || {}).id;
+  const profileId = () => getAvail(email()).ttId;    // every faculty account is linked to a timetable on the server
+  // Sends one change to the server, then reloads the server's data. Returns an error message or "".
+  const send = async (path, body) => {
+    try { await api(path, body); } catch (err) { return err.message; }
+    await syncFromServer();
+    return "";
   };
-  const editClasses = fn => { const st = ttStore(), id = profileId(); fn(st[id].classes); st[id].edited = true; save(TTS, st); };
 
   function draw() {
     if (!email()) { el("weekGrid").innerHTML = '<p class="muted">Add a faculty member first.</p>'; return; }
     const a = getAvail(email()), id = profileId(), p = ttFaculty(id);
+    if (!p) { el("weekGrid").innerHTML = '<p class="muted">Link this account to a timetable under Faculty first.</p>'; return; }
     sf.slotLen.value = String(a.slotLen); sf.defCap.value = a.capacity;
     sf.querySelectorAll('input[name="days"]').forEach(c => { c.checked = a.days.includes(Number(c.value)); });
     const offered = weeklySlots(email()).filter(s => !s.off).length;
@@ -763,12 +764,13 @@ function adminTimetablePage(me) {
 
   pick.addEventListener("change", () => { history.replaceState(null, "", "?f=" + encodeURIComponent(email())); draw(); });
 
-  sf.addEventListener("submit", e => {
+  sf.addEventListener("submit", async e => {
     e.preventDefault();
     const days = [...sf.querySelectorAll('input[name="days"]:checked')].map(c => Number(c.value));
     if (!days.length) return showMessage("Choose at least one consultation day.", false);
-    const a = getAvail(email()), slotLen = Number(sf.slotLen.value);
-    setAvail(email(), { ...a, slotLen, capacity: Number(sf.defCap.value), days, off: slotLen !== a.slotLen ? {} : a.off });
+    const slotLen = Number(sf.slotLen.value);   // a new slot length also clears the "not offered" marks (server)
+    const err = await send(`/admin/faculty/${facultyId()}/settings`, { slot_len: slotLen, capacity: Number(sf.defCap.value), days });
+    if (err) return showMessage(err, false);
     notify(email(), "Consultation hours updated", `The admin set your consultation slots to ${slotLen} minutes for up to ${sf.defCap.value} students.`);
     showMessage("Slot settings saved.", true); draw();
   });
@@ -778,7 +780,7 @@ function adminTimetablePage(me) {
     ef.querySelectorAll(".for-class").forEach(x => { x.hidden = consult; });
     ef.querySelectorAll(".for-consult").forEach(x => { x.hidden = !consult; });
   });
-  ef.addEventListener("submit", e => {
+  ef.addEventListener("submit", async e => {
     e.preventDefault();
     if (!email()) return showMessage("Add a faculty member first.", false);
     const day = Number(ef.day.value), start = ef.start.value, end = ef.end.value;
@@ -786,15 +788,16 @@ function adminTimetablePage(me) {
     if (ef.type.value === "consult") {
       const a = getAvail(email());
       if (classClash(email(), day, start, end) && !confirm("This overlaps a class. Add the consultation slot anyway?")) return;
-      a.custom.push({ id: "c" + Date.now(), day, start, end, capacity: Number(ef.capacity.value) || a.capacity });
-      setAvail(email(), a);
+      const err = await send(`/admin/faculty/${facultyId()}/custom-slots`, { day, start, end, capacity: Number(ef.capacity.value) || a.capacity });
+      if (err) return showMessage(err, false);
       notify(email(), "Consultation hours updated", `The admin added consultation hours on ${DAY_LONG[day]}, ${start} - ${end}.`);
       showMessage(`Consultation slot added on ${DAY_LONG[day]}.`, true);
     } else {
       const busy = ef.type.value === "busy";
       if (!busy && !ef.code.value.trim()) return showMessage("Enter the subject code.", false);
-      editClasses(cl => cl.push({ id: "x" + Date.now(), day, start, end, code: busy ? "Busy" : ef.code.value.trim().toUpperCase(),
-        subject: ef.subject.value.trim() || (busy ? "Not available" : ""), section: ef.section.value.trim(), room: ef.room.value.trim() }));
+      const err = await send(`/admin/timetables/${profileId()}/classes`, { day, start, end, code: busy ? "Busy" : ef.code.value.trim().toUpperCase(),
+        subject: ef.subject.value.trim() || (busy ? "Not available" : ""), section: ef.section.value.trim(), room: ef.room.value.trim() });
+      if (err) return showMessage(err, false);
       const n = timetableChanged(email(), `added ${busy ? "a busy period" : "a class"} on ${DAY_LONG[day]}, ${start} - ${end}`);
       showMessage(`Added to ${DAY_LONG[day]}.` + (n ? ` ${n} booked meeting(s) now clash; the faculty member was notified.` : ""), !n);
     }
@@ -802,18 +805,23 @@ function adminTimetablePage(me) {
     draw();
   });
 
-  el("weekGrid").addEventListener("click", e => {
+  el("weekGrid").addEventListener("click", async e => {
     const btn = e.target.closest("button.blk");
     if (!btn) return;
     const a = getAvail(email());
     if (btn.dataset.key) {                             // offer / stop offering a free slot
-      if (a.off[btn.dataset.key]) delete a.off[btn.dataset.key]; else a.off[btn.dataset.key] = true;
-      setAvail(email(), a); draw();
+      const [day, start] = btn.dataset.key.split("|");
+      const err = await send(`/admin/faculty/${facultyId()}/slots-off`, { day: Number(day), start, off: !a.off[btn.dataset.key] });
+      if (err) return showMessage(err, false);
+      draw();
       const again = el("weekGrid").querySelector(`[data-key="${btn.dataset.key}"]`); if (again) again.focus();
       return;
     }
     if (btn.dataset.cid) {
-      if (confirm("Remove this extra consultation slot? Existing bookings are kept.")) { a.custom = a.custom.filter(c => c.id !== btn.dataset.cid); setAvail(email(), a); draw(); }
+      if (!confirm("Remove this extra consultation slot? Existing bookings are kept.")) return;
+      const err = await send(`/admin/custom-slots/${btn.dataset.cid}/delete`, {});
+      if (err) return showMessage(err, false);
+      draw();
       return;
     }
     const c = classesOf(email()).find(x => x.id === btn.dataset.class);
@@ -827,30 +835,37 @@ function adminTimetablePage(me) {
         <div class="field wide"><label for="dSub">Subject</label><input id="dSub" name="subject" value="${esc(c.subject)}"></div>
         <div class="field"><label for="dSec">Section</label><input id="dSec" name="section" value="${esc(c.section)}"></div>
         <div class="field"><label for="dRoom">Room</label><input id="dRoom" name="room" value="${esc(c.room)}"></div></div>`,
-      onConfirm: f => {
+      onConfirm: async f => {
         if (!f.code.value.trim()) return "Enter a code.";
         if (!f.start.value || !f.end.value || f.end.value <= f.start.value) return "End time must be after start time.";
-        editClasses(cl => Object.assign(cl.find(x => x.id === c.id), { day: Number(f.day.value), start: f.start.value, end: f.end.value,
-          code: f.code.value.trim(), subject: f.subject.value.trim(), section: f.section.value.trim(), room: f.room.value.trim() }));
+        const err = await send(`/admin/classes/${c.id}`, { day: Number(f.day.value), start: f.start.value, end: f.end.value,
+          code: f.code.value.trim(), subject: f.subject.value.trim(), section: f.section.value.trim(), room: f.room.value.trim() });
+        if (err) return err;
         const n = timetableChanged(email(), `changed ${c.code} (${DAY_SHORT[c.day]} ${c.start}) to ${DAY_LONG[Number(f.day.value)]} ${f.start.value} - ${f.end.value}`);
         showMessage("Timetable entry updated." + (n ? ` ${n} booked meeting(s) now clash; the faculty member was notified.` : ""), !n);
         draw(); return "";
       },
-      extra: { text: "Remove entry", onClick: () => {
-        editClasses(cl => cl.splice(cl.findIndex(x => x.id === c.id), 1));
+      extra: { text: "Remove entry", onClick: async () => {
+        const err = await send(`/admin/classes/${c.id}/delete`, {});
+        if (err) return err;
         timetableChanged(email(), `removed ${c.code} on ${DAY_LONG[c.day]}, ${c.start} - ${c.end}. That time is now open for consultations`);
         showMessage(`${c.code} removed. The freed time is now offered to students.`, true); draw(); return "";
       } } });
   });
 
-  el("restoreTT").addEventListener("click", () => {
-    const id = profileId(), orig = TT.find(f => f.id === id);
-    if (!orig || !confirm("Replace this faculty member's timetable with the imported university timetable? Your edits to it will be lost.")) return;
-    const st = ttStore(); st[id] = importedProfile(orig); save(TTS, st);   // edited flag cleared: future corrections apply
+  el("restoreTT").addEventListener("click", async () => {
+    const id = profileId();
+    if (!TT.some(f => f.id === id) || !confirm("Replace this faculty member's timetable with the imported university timetable? Your edits to it will be lost.")) return;
+    const err = await send(`/admin/timetables/${id}/restore`, {});   // edited flag cleared: future corrections apply
+    if (err) return showMessage(err, false);
     timetableChanged(email(), "restored your timetable to the official university timetable");
     showMessage("Imported timetable restored.", true); draw();
   });
-  el("offerAll").addEventListener("click", () => { const a = getAvail(email()); a.off = {}; setAvail(email(), a); draw(); });
+  el("offerAll").addEventListener("click", async () => {
+    const err = await send(`/admin/faculty/${facultyId()}/slots-off/clear`, {});
+    if (err) return showMessage(err, false);
+    draw();
+  });
   draw();
 }
 
@@ -1017,7 +1032,7 @@ if (requiredRole) (async () => {
   if (!me || me.role !== requiredRole) {
     window.location.href = "index.html";
   } else {
-    try { await syncFaculty(); } catch { /* keep the cached list if the server is briefly unavailable */ }
+    try { await syncFromServer(); } catch { /* keep the cached list if the server is briefly unavailable */ }
     document.querySelectorAll("[data-user-name]").forEach(n => { n.textContent = me.name; });
     if (el("myAppts")) studentDashboard(me);
     if (el("upcomingAppts")) appointmentsPage(me);

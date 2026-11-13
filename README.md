@@ -22,8 +22,9 @@ python app.py
 ```
 Then open http://127.0.0.1:5000/. Tests: `python -m unittest discover -s tests -v` (needs MySQL running).
 
-The backend is being connected step by step. Accounts and logins are on the server (MySQL);
-bookings, timetable edits and notifications are still kept in the browser for now.
+The backend is being connected step by step. Accounts, logins, faculty, timetables and
+consultation settings are on the server (MySQL); bookings and notifications are still kept in
+the browser for now.
 
 ## Logging in
 - **Admin:** created with `flask --app app create-admin` (there is no built-in admin). Click

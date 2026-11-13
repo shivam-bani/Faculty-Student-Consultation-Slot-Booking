@@ -5,6 +5,12 @@
     POST /api/admin/faculty/<id>/link          link the account to another timetable
     POST /api/admin/faculty/<id>/password      set a new temporary password
     POST /api/admin/faculty/<id>/deactivate    remove from CampusSync (history is kept)
+    GET  /api/faculty/<id>/week                classes and weekly consultation slots
+    POST /api/admin/faculty/<id>/settings      slot length, students per slot, consultation days
+    POST /api/admin/faculty/<id>/slots-off     stop or start offering one weekly free slot
+    POST /api/admin/faculty/<id>/slots-off/clear   offer all free slots again
+    POST /api/admin/faculty/<id>/custom-slots  add extra consultation hours
+    POST /api/admin/custom-slots/<id>/delete   remove extra consultation hours
 """
 import re
 
@@ -13,13 +19,16 @@ from flask import Blueprint, abort, jsonify, make_response
 from werkzeug.security import generate_password_hash
 
 import db
+from slots import weekly_slots
 from auth import MAX_PASSWORD, MIN_PASSWORD, error, json_body, login_required
 
 bp = Blueprint("faculty", __name__, url_prefix="/api")
 
 EMAIL = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
 PROFILE_ID = re.compile(r"[a-z0-9-]{1,80}")
+TIME = re.compile(r"([01]\d|2[0-3]):[0-5]\d")
 DEFAULT_DAYS = (1, 2, 3, 4, 5)  # Monday to Friday, as in the old browser-only version
+SLOT_LENGTHS = (15, 20, 30, 45, 55)  # minutes, the choices on the admin Timetables page
 
 FACULTY_QUERY = """
     SELECT u.id, u.name, u.email, s.profile_id, p.name
@@ -42,12 +51,35 @@ def profile_holder(cur, profile_id):
     return row[0] if row else None
 
 
+def all_settings(cur):
+    """Consultation settings of every faculty member, keyed by faculty id. Same shape the pages
+    keep in the browser: slot_len, capacity, days, off (["day|HH:MM", ...]) and custom slots."""
+    settings = {}
+    cur.execute("SELECT faculty_id, slot_len, capacity FROM faculty_settings")
+    for fid, slot_len, capacity in cur.fetchall():
+        settings[fid] = {"slot_len": slot_len, "capacity": capacity, "days": [], "off": [], "custom": []}
+    cur.execute("SELECT faculty_id, day_of_week FROM consult_days ORDER BY day_of_week")
+    for fid, day in cur.fetchall():
+        settings.get(fid, {}).get("days", []).append(day)
+    cur.execute("SELECT faculty_id, day_of_week, TIME_FORMAT(start_time, '%H:%i') FROM slots_off ORDER BY 2, 3")
+    for fid, day, start in cur.fetchall():
+        settings.get(fid, {}).get("off", []).append(f"{day}|{start}")
+    cur.execute("SELECT id, faculty_id, day_of_week, TIME_FORMAT(start_time, '%H:%i'), TIME_FORMAT(end_time, '%H:%i'), "
+                "capacity FROM custom_slots ORDER BY day_of_week, start_time, id")
+    for cid, fid, day, start, end, capacity in cur.fetchall():
+        settings.get(fid, {}).get("custom", []).append(
+            {"id": str(cid), "day": day, "start": start, "end": end, "capacity": capacity})
+    return settings
+
+
 @bp.get("/faculty")
 @login_required()
 def list_faculty():
     cur = db.get_db().cursor()
     cur.execute(FACULTY_QUERY + " ORDER BY u.name")
-    return jsonify(ok=True, faculty=[faculty_json(r) for r in cur.fetchall()])
+    rows = cur.fetchall()
+    settings = all_settings(cur)
+    return jsonify(ok=True, faculty=[{**faculty_json(r), "settings": settings.get(r[0])} for r in rows])
 
 
 @bp.post("/admin/faculty")
@@ -130,6 +162,10 @@ def link_timetable(fid):
         conn.rollback()
         return error(f"That timetable is already linked to {holder}.", 409)
     try:
+        cur.execute("SELECT profile_id FROM faculty_settings WHERE faculty_id = %s", (fid,))
+        if cur.fetchone()[0] != profile_id:
+            # Another timetable has other free slots, so the old "not offered" marks no longer fit.
+            cur.execute("DELETE FROM slots_off WHERE faculty_id = %s", (fid,))
         cur.execute("UPDATE faculty_settings SET profile_id = %s WHERE faculty_id = %s", (profile_id, fid))
     except mysql.connector.IntegrityError as e:
         conn.rollback()
@@ -168,3 +204,127 @@ def deactivate(fid):
     cur.execute("UPDATE faculty_settings SET profile_id = NULL WHERE faculty_id = %s", (fid,))
     conn.commit()
     return jsonify(ok=True)
+
+
+def day_and_time(data, *keys):
+    """Read and check a day (1-6) and one or more HH:MM times from the request body."""
+    try:
+        day = int(data.get("day"))
+    except (TypeError, ValueError):
+        day = 0
+    times = [str(data.get(k, "")) for k in keys]
+    if not 1 <= day <= 6:
+        abort(error("Choose a day from Monday to Saturday.", 400))
+    if not all(TIME.fullmatch(t) for t in times):
+        abort(error("Enter times as HH:MM.", 400))
+    return day, *times
+
+
+@bp.post("/admin/faculty/<int:fid>/settings")
+@login_required("admin")
+def save_settings(fid):
+    data = json_body()
+    try:
+        slot_len, capacity = int(data.get("slot_len")), int(data.get("capacity"))
+        days = sorted({int(d) for d in data.get("days", [])})
+    except (TypeError, ValueError):
+        return error("Send the slot length, students per slot and days as numbers.", 400)
+    if slot_len not in SLOT_LENGTHS:
+        return error("Choose a slot length from the list.", 400)
+    if not 1 <= capacity <= 50:
+        return error("Students per slot must be between 1 and 50.", 400)
+    if not days or not all(1 <= d <= 6 for d in days):
+        return error("Choose at least one consultation day.", 400)
+    conn = db.get_db()
+    cur = conn.cursor()
+    active_faculty_or_404(cur, fid)
+    cur.execute("SELECT slot_len FROM faculty_settings WHERE faculty_id = %s", (fid,))
+    if cur.fetchone()[0] != slot_len:
+        # The weekly slots start at different times now, so the old "not offered" marks no longer fit.
+        cur.execute("DELETE FROM slots_off WHERE faculty_id = %s", (fid,))
+    cur.execute("UPDATE faculty_settings SET slot_len = %s, capacity = %s WHERE faculty_id = %s", (slot_len, capacity, fid))
+    cur.execute("DELETE FROM consult_days WHERE faculty_id = %s", (fid,))
+    cur.executemany("INSERT INTO consult_days (faculty_id, day_of_week) VALUES (%s, %s)", [(fid, d) for d in days])
+    conn.commit()
+    return jsonify(ok=True)
+
+
+@bp.post("/admin/faculty/<int:fid>/slots-off")
+@login_required("admin")
+def toggle_slot(fid):
+    data = json_body()
+    day, start = day_and_time(data, "start")
+    conn = db.get_db()
+    cur = conn.cursor()
+    active_faculty_or_404(cur, fid)
+    if data.get("off"):
+        cur.execute("INSERT IGNORE INTO slots_off (faculty_id, day_of_week, start_time) VALUES (%s, %s, %s)", (fid, day, start))
+    else:
+        cur.execute("DELETE FROM slots_off WHERE faculty_id = %s AND day_of_week = %s AND start_time = %s", (fid, day, start))
+    conn.commit()
+    return jsonify(ok=True)
+
+
+@bp.post("/admin/faculty/<int:fid>/slots-off/clear")
+@login_required("admin")
+def offer_all(fid):
+    json_body()
+    conn = db.get_db()
+    cur = conn.cursor()
+    active_faculty_or_404(cur, fid)
+    cur.execute("DELETE FROM slots_off WHERE faculty_id = %s", (fid,))
+    conn.commit()
+    return jsonify(ok=True)
+
+
+@bp.post("/admin/faculty/<int:fid>/custom-slots")
+@login_required("admin")
+def add_custom_slot(fid):
+    data = json_body()
+    day, start, end = day_and_time(data, "start", "end")
+    try:
+        capacity = int(data.get("capacity"))
+    except (TypeError, ValueError):
+        capacity = 0
+    if end <= start:
+        return error("End time must be after start time.", 400)
+    if not 1 <= capacity <= 50:
+        return error("Students per slot must be between 1 and 50.", 400)
+    conn = db.get_db()
+    cur = conn.cursor()
+    active_faculty_or_404(cur, fid)
+    cur.execute("INSERT INTO custom_slots (faculty_id, day_of_week, start_time, end_time, capacity) VALUES (%s, %s, %s, %s, %s)",
+                (fid, day, start, end, capacity))
+    conn.commit()
+    return make_response(jsonify(ok=True, id=str(cur.lastrowid)), 201)
+
+
+@bp.post("/admin/custom-slots/<int:cid>/delete")
+@login_required("admin")
+def delete_custom_slot(cid):
+    json_body()
+    conn = db.get_db()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM custom_slots WHERE id = %s", (cid,))
+    if cur.rowcount == 0:
+        conn.rollback()
+        return error("Extra slot not found.", 404)
+    conn.commit()
+    return jsonify(ok=True)
+
+
+@bp.get("/faculty/<int:fid>/week")
+@login_required()
+def week(fid):
+    """A faculty member's classes and the weekly consultation slots worked out from them."""
+    cur = db.get_db().cursor()
+    cur.execute(FACULTY_QUERY + " AND u.id = %s", (fid,))
+    row = cur.fetchone()
+    if row is None:
+        return error("Faculty account not found.", 404)
+    settings = all_settings(cur)[fid]
+    cur.execute("SELECT day_of_week, TIME_FORMAT(start_time, '%H:%i'), TIME_FORMAT(end_time, '%H:%i'), code, subject "
+                "FROM timetable_classes WHERE profile_id = %s ORDER BY day_of_week, start_time, id", (row[3],))
+    classes = [{"day": d, "start": s, "end": e, "code": code, "subject": subject} for d, s, e, code, subject in cur.fetchall()]
+    return jsonify(ok=True, faculty=faculty_json(row), settings=settings, classes=classes,
+                   slots=weekly_slots(settings, classes))
