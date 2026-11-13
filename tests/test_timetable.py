@@ -105,9 +105,11 @@ class EditTests(TimetableTestCase):
         self.assertEqual(self.timetable()["classes"], [])
         self.assertEqual(self.admin.post(f"/api/admin/classes/{cid}/delete", json={}).status_code, 404)
 
-    def test_busy_period(self):
-        self.assertEqual(self.add(code="Busy", subject="Department meeting", section="", room="").status_code, 201)
-        self.assertEqual(self.timetable()["classes"][0]["code"], "BUSY")
+    def test_busy_period_keeps_the_spelling_the_pages_use(self):
+        for code in ("Busy", "busy", "BUSY"):
+            with self.subTest(code=code):
+                self.assertEqual(self.add(code=code, subject="Department meeting", section="", room="").status_code, 201)
+        self.assertEqual({c["code"] for c in self.timetable()["classes"]}, {"Busy"})  # script.js checks code === "Busy"
 
     def test_only_admins_can_edit(self):
         cid = self.add().get_json()["class"]["id"]

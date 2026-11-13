@@ -38,6 +38,8 @@ def class_from_request():
         day = 0
     start, end = str(data.get("start", "")), str(data.get("end", ""))
     code = str(data.get("code", "")).strip().upper()
+    if code == "BUSY":
+        code = "Busy"  # the pages show busy periods by this exact spelling
     subject, section, room = (str(data.get(k, "")).strip() for k in ("subject", "section", "room"))
     if not 1 <= day <= 6:
         abort(error("Choose a day from Monday to Saturday.", 400))
