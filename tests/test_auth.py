@@ -31,6 +31,7 @@ def add_user(email, role="student", active=True):
 
 class AuthTestCase(unittest.TestCase):
     def setUp(self):
+        execute("DELETE FROM users WHERE email LIKE 'unittest-%'")  # leftovers from an interrupted run
         self.client = app.test_client()
         self.student_id = add_user("unittest-student@geu.ac.in")
 
