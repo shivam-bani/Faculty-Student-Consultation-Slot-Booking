@@ -8,7 +8,7 @@ import re
 from datetime import datetime
 
 import mysql.connector
-from flask import Blueprint, abort, jsonify, make_response
+from flask import Blueprint, abort, current_app, jsonify, make_response
 
 import db
 from auth import current_user, error, json_body, login_required
@@ -23,6 +23,7 @@ ID_PATTERN = re.compile(r"[A-Z0-9-]{3,20}")
 VIRTUAL_REF = re.compile(r"v:(\d+)\|(\d{4}-\d{2}-\d{2})\|(\d{2}:\d{2})")
 SESSION_REF = re.compile(r"s:(\d+)")
 ACTIVE = "('Pending', 'Waiting', 'In Session')"  # statuses that hold a seat and are not over
+RETRIES = 3  # attempts at a booking transaction that MySQL undid to break a deadlock
 
 SESSION_COLUMNS = """
     SELECT s.id, f.email, f.name, s.topic, s.description, DATE_FORMAT(s.session_date, '%Y-%m-%d'),
@@ -128,6 +129,35 @@ def has_started(date, start, now):
     return date < today or (date == today and start <= now.strftime("%H:%M"))
 
 
+def save_profile(cur, user_id, profile):
+    """Save the student's details on their own row only.
+
+    INSERT first, and UPDATE only when this student already has a row. Two other ways were wrong:
+    - INSERT ... ON DUPLICATE KEY UPDATE also fires on ANOTHER student's UNIQUE student ID or roll
+      number, and overwrote that student's row.
+    - UPDATE first locks the empty "gap" when the row does not exist yet (REPEATABLE READ); two new
+      students then each waited for the other's gap lock before their INSERT: a deadlock.
+    A clash with another student's student ID or roll number raises the UNIQUE key error (1062)."""
+    values = {**profile, "uid": user_id}
+    try:
+        cur.execute("INSERT INTO student_profiles (user_id, student_id, roll_no, course, semester, section, group_id) "
+                    "VALUES (%(uid)s, %(student_id)s, %(roll_no)s, %(course)s, %(semester)s, %(section)s, %(group_id)s)", values)
+    except mysql.connector.IntegrityError as e:
+        if e.errno != 1062 or "PRIMARY" not in e.msg:
+            raise  # e.g. uq_profiles_student_id: someone else's student ID
+        cur.execute("UPDATE student_profiles SET student_id = %(student_id)s, roll_no = %(roll_no)s, course = %(course)s, "
+                    "semester = %(semester)s, section = %(section)s, group_id = %(group_id)s WHERE user_id = %(uid)s", values)
+
+
+def lock_faculty(cur, fid):
+    """Deadlock prevention. Every booking takes its locks in the same order: the student's row, the
+    faculty member's row, then the session row. With one fixed order no two bookings can each hold a
+    lock the other is waiting for (no circular wait). It also means only one booking at a time can
+    create a faculty member's session, so two "first" bookings cannot fight over the same new row."""
+    cur.execute("SELECT id FROM users WHERE id = %s AND role = 'faculty' FOR UPDATE", (fid,))
+    cur.fetchone()
+
+
 def find_session(cur, ref, now):
     """Turn the slot reference from the booking form into a locked session row.
 
@@ -137,6 +167,7 @@ def find_session(cur, ref, now):
     m = VIRTUAL_REF.fullmatch(ref)
     if m:
         fid, date, start = int(m.group(1)), m.group(2), m.group(3)
+        lock_faculty(cur, fid)
         offered = upcoming_slots(week_data(cur, fid)[3], sessions_of(cur, fid), now)  # the 14 days the page offers
         slot = next((s for s in offered if s["date"] == date and s["start"] == start), None)
         if slot is None:
@@ -155,6 +186,11 @@ def find_session(cur, ref, now):
         if not m:
             abort(error("Please choose a time slot.", 400))
         sid = int(m.group(1))
+        cur.execute("SELECT faculty_id FROM sessions WHERE id = %s", (sid,))
+        row = cur.fetchone()
+        if row is None:
+            abort(error("This slot is no longer available. Please choose another one.", 409))
+        lock_faculty(cur, row[0])
     # The lock (a mutex on this session): every other booking for it waits here until this transaction ends.
     cur.execute("SELECT s.id, s.faculty_id, DATE_FORMAT(s.session_date, '%Y-%m-%d'), TIME_FORMAT(s.start_time, '%H:%i'), "
                 "TIME_FORMAT(s.end_time, '%H:%i'), s.capacity, s.cancelled, f.is_active "
@@ -180,32 +216,41 @@ def book():
     if ctype not in ("General", "Major project"):
         return error("Choose the consultation type.", 400)
     profile = profile_from_request(data)
-    student, now = current_user(), datetime.now()
-
+    student = current_user()
     conn = db.get_db()
+    for attempt in range(1, RETRIES + 1):
+        try:
+            return book_once(conn, student, profile, str(data.get("ref", "")), topic, desc, ctype, datetime.now())
+        except mysql.connector.Error as e:
+            conn.rollback()
+            # Deadlock recovery: MySQL broke a deadlock by undoing this whole transaction (1213), or a lock
+            # wait timed out (1205). Nothing was saved, so the booking can safely be tried again.
+            if e.errno not in (1213, 1205) or attempt == RETRIES:
+                raise
+            current_app.logger.warning("Booking attempt %s hit MySQL error %s; trying again", attempt, e.errno)
+
+
+def book_once(conn, student, profile, ref, topic, desc, ctype, now):
+    """One attempt at the booking transaction (see book())."""
     cur = conn.cursor()
     try:
-        # Lock order is always: the student's row, then the session row. Locking in the same order
-        # everywhere avoids deadlocks. The student lock also stops a double click from booking twice.
+        # Lock order is always: the student's row, the faculty member's row, then the session row
+        # (see lock_faculty). The student lock also stops a double click from booking twice.
         cur.execute("SELECT id FROM users WHERE id = %s FOR UPDATE", (student["id"],))
         cur.fetchone()
-        # Save the student's details on their own row only. (Not INSERT ... ON DUPLICATE KEY UPDATE: that
-        # also fires on another student's UNIQUE student ID or roll number and would overwrite their row.)
-        values = {**profile, "uid": student["id"]}
-        cur.execute("UPDATE student_profiles SET student_id = %(student_id)s, roll_no = %(roll_no)s, course = %(course)s, "
-                    "semester = %(semester)s, section = %(section)s, group_id = %(group_id)s WHERE user_id = %(uid)s", values)
-        cur.execute("SELECT 1 FROM student_profiles WHERE user_id = %s", (student["id"],))
-        if cur.fetchone() is None:
-            cur.execute("INSERT INTO student_profiles (user_id, student_id, roll_no, course, semester, section, group_id) "
-                        "VALUES (%(uid)s, %(student_id)s, %(roll_no)s, %(course)s, %(semester)s, %(section)s, %(group_id)s)", values)
-        sid, fid, date, start, end, capacity = find_session(cur, str(data.get("ref", "")), now)
+        save_profile(cur, student["id"], profile)
+        sid, fid, date, start, end, capacity = find_session(cur, ref, now)
 
         # Inside the lock: capacity works like a counting semaphore for this session.
-        cur.execute("SELECT COUNT(*) FROM bookings WHERE session_id = %s AND status NOT IN ('Rejected', 'Cancelled')", (sid,))
+        # These reads end in FOR UPDATE on purpose. Under MySQL's default REPEATABLE READ a plain SELECT
+        # reads an older snapshot of the data; a locking read always sees the latest committed bookings,
+        # including those just made by the students who held the lock before us.
+        cur.execute("SELECT COUNT(*) FROM bookings WHERE session_id = %s AND status NOT IN ('Rejected', 'Cancelled') "
+                    "FOR UPDATE", (sid,))
         if cur.fetchone()[0] >= capacity:
             conn.rollback()
             return error("This session is full.", 409)
-        cur.execute(f"SELECT COUNT(*) FROM bookings WHERE session_id = %s AND student_id = %s AND status IN {ACTIVE}",
+        cur.execute(f"SELECT COUNT(*) FROM bookings WHERE session_id = %s AND student_id = %s AND status IN {ACTIVE} FOR UPDATE",
                     (sid, student["id"]))
         if cur.fetchone()[0]:
             conn.rollback()
@@ -218,7 +263,7 @@ def book():
             conn.rollback()
             return error(f"You already have a consultation at that time (token #{clash[0]}). Choose a different slot.", 409)
 
-        cur.execute("SELECT COALESCE(MAX(token), 0) + 1 FROM bookings WHERE session_id = %s", (sid,))
+        cur.execute("SELECT COALESCE(MAX(token), 0) + 1 FROM bookings WHERE session_id = %s FOR UPDATE", (sid,))
         token = cur.fetchone()[0]  # tokens are never reused, even after a cancellation
         priority = base_priority(profile["semester"], ctype)
         cur.execute("INSERT INTO bookings (session_id, student_id, token, topic, description, consultation_type, base_priority) "
