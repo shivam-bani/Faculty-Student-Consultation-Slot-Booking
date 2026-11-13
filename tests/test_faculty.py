@@ -204,6 +204,13 @@ class SettingsTests(FacultyTestCase):
         self.post("slots-off/clear")
         self.assertEqual(self.settings()["off"], [])
 
+    def test_linking_another_timetable_clears_switched_off_slots(self):
+        self.post("slots-off", {"day": 2, "start": "09:00", "off": True})
+        self.post("link", {"profile_id": "unittest-prof-a"})  # same timetable: kept
+        self.assertEqual(self.settings()["off"], ["2|09:00"])
+        self.post("link", {"profile_id": "unittest-prof-b"})  # another timetable: cleared
+        self.assertEqual(self.settings()["off"], [])
+
     def test_new_slot_length_clears_switched_off_slots(self):
         self.post("slots-off", {"day": 2, "start": "09:00", "off": True})
         self.post("settings", {"slot_len": 30, "capacity": 4, "days": [1, 2]})  # same length: kept

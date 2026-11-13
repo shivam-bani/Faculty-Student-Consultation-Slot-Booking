@@ -162,6 +162,10 @@ def link_timetable(fid):
         conn.rollback()
         return error(f"That timetable is already linked to {holder}.", 409)
     try:
+        cur.execute("SELECT profile_id FROM faculty_settings WHERE faculty_id = %s", (fid,))
+        if cur.fetchone()[0] != profile_id:
+            # Another timetable has other free slots, so the old "not offered" marks no longer fit.
+            cur.execute("DELETE FROM slots_off WHERE faculty_id = %s", (fid,))
         cur.execute("UPDATE faculty_settings SET profile_id = %s WHERE faculty_id = %s", (profile_id, fid))
     except mysql.connector.IntegrityError as e:
         conn.rollback()
