@@ -116,7 +116,8 @@ def login():
     if not is_active:
         return error("This account has been deactivated. Please contact the admin.", 403)
     if wanted_role and wanted_role != role:
-        return error(f'This email belongs to a {role} account. Use the "Login as {role.capitalize()}" button.', 403)
+        article = "an" if role == "admin" else "a"
+        return error(f'This email belongs to {article} {role} account. Use the "Login as {role.capitalize()}" button.', 403)
 
     session.clear()  # start a fresh session on every login
     session["user_id"] = user_id

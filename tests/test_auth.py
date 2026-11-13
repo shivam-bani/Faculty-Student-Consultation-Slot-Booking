@@ -31,6 +31,7 @@ def add_user(email, role="student", active=True):
 
 class AuthTestCase(unittest.TestCase):
     def setUp(self):
+        execute("DELETE FROM users WHERE email LIKE 'unittest-%'")  # leftovers from an interrupted run
         self.client = app.test_client()
         self.student_id = add_user("unittest-student@geu.ac.in")
 
@@ -75,8 +76,13 @@ class LoginTests(AuthTestCase):
     def test_wrong_login_button(self):
         r = self.login(role="admin")
         self.assertEqual(r.status_code, 403)
-        self.assertIn("student account", r.get_json()["error"])
+        self.assertIn("belongs to a student account", r.get_json()["error"])
         self.assertEqual(self.client.get("/api/auth/me").status_code, 401)  # not logged in
+
+    def test_wrong_login_button_message_for_admin(self):
+        add_user("unittest-admin@example.com", role="admin")
+        r = self.login(email="unittest-admin@example.com", role="student")
+        self.assertIn('belongs to an admin account. Use the "Login as Admin" button', r.get_json()["error"])
 
     def test_deactivated_account_cannot_log_in(self):
         add_user("unittest-old@geu.ac.in", role="faculty", active=False)

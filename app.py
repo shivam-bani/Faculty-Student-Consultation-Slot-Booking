@@ -11,6 +11,7 @@ from flask import Flask, jsonify
 import auth
 import commands
 import db  # also loads .env
+import faculty
 
 # static_url_path="" serves static/index.html at /index.html (not /static/index.html),
 # so the pages' relative links (style.css, script.js, book.html, ...) keep working unchanged.
@@ -28,6 +29,7 @@ app.config.update(
 db.init_app(app)
 commands.init_app(app)
 app.register_blueprint(auth.bp)
+app.register_blueprint(faculty.bp)
 
 
 @app.get("/")

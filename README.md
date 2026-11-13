@@ -22,18 +22,19 @@ python app.py
 ```
 Then open http://127.0.0.1:5000/. Tests: `python -m unittest discover -s tests -v` (needs MySQL running).
 
-The backend is being connected step by step. Until login moves to the server, the pages still
-keep their data in the browser and use the demo logins below.
+The backend is being connected step by step. Accounts and logins are on the server (MySQL);
+bookings, timetable edits and notifications are still kept in the browser for now.
 
 ## Logging in
-- **Admin:** `admin@campussync.edu` / `Admin@1234` (created automatically). Click **Login as Admin**,
-  then change the password under **Account**.
+- **Admin:** created with `flask --app app create-admin` (there is no built-in admin). Click
+  **Login as Admin**; the password can be changed under **Account**.
 - **Faculty:** the admin creates the account under **Faculty** (pick the name from the timetable
   list, click **Create account**, set email + temporary password). The faculty member then uses
   **Login as Faculty**. The admin can reset a forgotten password there.
-- **Students:** sign up on the Sign Up page, then **Login as Student**.
-- Data lives in one browser. If something looks stale after an update, use
-  **Reset all data saved in this browser** on the login page.
+- **Students:** sign up on the Sign Up page with an `@geu.ac.in` email, then **Login as Student**.
+- Passwords are stored only as hashes. Who is logged in (and their role) is decided by the server.
+- **Reset all data saved in this browser** on the login page clears the data that is still kept
+  in the browser; it does not delete accounts.
 
 ## Roles
 **Admin** (Faculty, Timetables, Account)
