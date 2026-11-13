@@ -167,5 +167,65 @@ class ManageFacultyTests(FacultyTestCase):
                 self.assertEqual(self.post(action, client=student).status_code, 403)
 
 
+class SettingsTests(FacultyTestCase):
+    def setUp(self):
+        super().setUp()
+        self.fid = self.create().get_json()["faculty"]["id"]
+
+    def settings(self):
+        faculty = self.admin.get("/api/faculty").get_json()["faculty"]
+        return next(f["settings"] for f in faculty if f["id"] == self.fid)
+
+    def post(self, path, body=None, client=None):
+        return (client or self.admin).post(f"/api/admin/faculty/{self.fid}/{path}", json=body or {})
+
+    def test_defaults(self):
+        self.assertEqual(self.settings(), {"slot_len": 30, "capacity": 3, "days": [1, 2, 3, 4, 5], "off": [], "custom": []})
+
+    def test_save_settings(self):
+        self.assertEqual(self.post("settings", {"slot_len": 45, "capacity": 5, "days": [6, 2, 2]}).status_code, 200)
+        s = self.settings()
+        self.assertEqual((s["slot_len"], s["capacity"], s["days"]), (45, 5, [2, 6]))
+
+    def test_invalid_settings(self):
+        for body in [{"slot_len": 25, "capacity": 3, "days": [1]}, {"slot_len": 30, "capacity": 0, "days": [1]},
+                     {"slot_len": 30, "capacity": 51, "days": [1]}, {"slot_len": 30, "capacity": 3, "days": []},
+                     {"slot_len": 30, "capacity": 3, "days": [7]}, {"slot_len": "x", "capacity": 3, "days": [1]}]:
+            with self.subTest(**body):
+                self.assertEqual(self.post("settings", body).status_code, 400)
+        self.assertEqual(self.settings()["slot_len"], 30)
+
+    def test_switch_slots_off_and_on(self):
+        self.post("slots-off", {"day": 2, "start": "09:00", "off": True})
+        self.post("slots-off", {"day": 3, "start": "12:30", "off": True})
+        self.assertEqual(self.settings()["off"], ["2|09:00", "3|12:30"])
+        self.post("slots-off", {"day": 2, "start": "09:00", "off": False})
+        self.assertEqual(self.settings()["off"], ["3|12:30"])
+        self.post("slots-off/clear")
+        self.assertEqual(self.settings()["off"], [])
+
+    def test_new_slot_length_clears_switched_off_slots(self):
+        self.post("slots-off", {"day": 2, "start": "09:00", "off": True})
+        self.post("settings", {"slot_len": 30, "capacity": 4, "days": [1, 2]})  # same length: kept
+        self.assertEqual(self.settings()["off"], ["2|09:00"])
+        self.post("settings", {"slot_len": 20, "capacity": 4, "days": [1, 2]})  # new length: cleared
+        self.assertEqual(self.settings()["off"], [])
+
+    def test_extra_slots(self):
+        r = self.post("custom-slots", {"day": 6, "start": "10:00", "end": "11:00", "capacity": 5})
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(self.settings()["custom"],
+                         [{"id": r.get_json()["id"], "day": 6, "start": "10:00", "end": "11:00", "capacity": 5}])
+        self.assertEqual(self.post("custom-slots", {"day": 6, "start": "11:00", "end": "10:00", "capacity": 5}).status_code, 400)
+        self.assertEqual(self.admin.post(f"/api/admin/custom-slots/{r.get_json()['id']}/delete", json={}).status_code, 200)
+        self.assertEqual(self.settings()["custom"], [])
+
+    def test_only_admins(self):
+        student = self.client_for("unittest-student@geu.ac.in")
+        for path in ("settings", "slots-off", "slots-off/clear", "custom-slots"):
+            with self.subTest(path=path):
+                self.assertEqual(self.post(path, client=student).status_code, 403)
+
+
 if __name__ == "__main__":
     unittest.main()
