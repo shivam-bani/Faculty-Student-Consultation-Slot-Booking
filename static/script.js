@@ -192,22 +192,41 @@ if (TT.length) ttStore();                             // apply timetable correct
 const ttProfiles = () => Object.entries(ttStore()).map(([id, p]) => ({ id, ...p })).sort((a, b) => nameKey(a.name).localeCompare(nameKey(b.name)));
 const guessTtId = name => (ttStore()[nameKey(name)] ? nameKey(name) : "");
 const linkedEmail = id => (getUsers().find(u => u.role === "faculty" && getAvail(u.email).ttId === id) || {}).email || "";
-function createFacultyAccount(name, email, password, ttId) {   // returns an error message or ""
-  const users = getUsers();
-  if (users.some(u => u.email === email)) return "An account with this email already exists.";
-  if (password.length < 8) return "The temporary password needs at least 8 characters.";
+async function createFacultyAccount(name, email, password, ttId) {   // returns an error message or ""
   if (!ttId) ttId = guessTtId(name);                  // typed a name that is in the timetable: link it
-  if (ttId && linkedEmail(ttId)) return `That timetable is already linked to ${linkedEmail(ttId)}.`;
   if (!ttId) {                                       // really new: start an empty timetable
-    const st = ttStore(); let id = nameKey(name) || "faculty", n = 2;
-    while (st[id]) id = nameKey(name) + "-" + n++;
-    st[id] = { name, classes: [], edited: true }; save(TTS, st); ttId = id;
+    const st = ttStore(), base = nameKey(name).replace(/[^a-z0-9-]/g, "") || "faculty";
+    let id = base, n = 2;
+    while (st[id]) id = base + "-" + n++;
+    ttId = id;
   }
-  users.push({ name, email, password, role: "faculty" });
-  localStorage.setItem(USERS_KEY, JSON.stringify(users));
-  setAvail(email, { ...getAvail(email), ttId });
+  try {     // the server checks the email, the password and that the timetable is not linked yet
+    await api("/admin/faculty", { name, email, password, profile_id: ttId, profile_name: ttFaculty(ttId)?.name || name });
+  } catch (err) {
+    return err.message;
+  }
+  const st = ttStore();
+  if (!st[ttId]) { st[ttId] = { name, classes: [], edited: true }; save(TTS, st); }
+  await syncFaculty();
   notify(email, "Welcome to CampusSync", "Your faculty account was created by the admin. Student requests for your free periods appear under Booking Requests.");
   return "";
+}
+
+// Faculty accounts live on the server. This copies the list (and each account's timetable link)
+// into the browser's cache, which the pages not yet connected to the server (booking, slots,
+// timetables) still read. It runs on every page load, so the server stays the source of truth.
+// It also strips passwords that older browser-only versions stored in the cache.
+async function syncFaculty() {
+  const { faculty } = await api("/faculty");
+  const users = getUsers().filter(u => u.role === "student").map(({ password, ...u }) => u);
+  const st = ttStore();
+  faculty.forEach(f => {
+    users.push({ id: f.id, name: f.name, email: f.email, role: "faculty" });
+    setAvail(f.email, { ...getAvail(f.email), ttId: f.profile_id || "" });
+    if (f.profile_id && !st[f.profile_id]) st[f.profile_id] = { name: f.profile_name || f.name, classes: [], edited: true };
+  });
+  save(TTS, st);
+  localStorage.setItem(USERS_KEY, JSON.stringify(users));
 }
 const ttFaculty = id => (id && ttStore()[id]) || null;
 
@@ -336,14 +355,15 @@ function openDialog({ title, body, confirm, danger, onConfirm, onOpen, extra }) 
     <button type="button" class="btn" data-close>Close</button></div></form>`;
   const form = d.querySelector("form");
   d.querySelector("[data-close]").addEventListener("click", () => d.close());
-  if (extra) d.querySelector("[data-extra]").addEventListener("click", () => {
-    const err = extra.onClick(form);
+  // onConfirm / extra.onClick return an error message or "" (or a promise of one, for server calls).
+  if (extra) d.querySelector("[data-extra]").addEventListener("click", async () => {
+    const err = await extra.onClick(form);
     if (err) { d.querySelector("#dlgMsg").textContent = err; return; }
     d.close();
   });
-  form.addEventListener("submit", e => {
+  form.addEventListener("submit", async e => {
     e.preventDefault();
-    const err = onConfirm ? onConfirm(form) : "";
+    const err = onConfirm ? await onConfirm(form) : "";
     if (err) { d.querySelector("#dlgMsg").textContent = err; return; }
     d.close();
   });
@@ -651,9 +671,9 @@ function adminFacultyPage(me) {
       const p = ttFaculty(b.dataset.create);
       openDialog({ title: `Create account for ${p.name}`, confirm: "Create account",
         body: accountFields(p.name, `<p class="muted">${p.classes.length} classes from the university timetable are linked to this account.</p>`),
-        onConfirm: f => {
+        onConfirm: async f => {
           if (!f.name.value.trim() || !f.email.checkValidity() || !f.email.value) return "Enter the name and a valid email.";
-          const err = createFacultyAccount(f.name.value.trim(), f.email.value.trim().toLowerCase(), f.password.value, p.id);
+          const err = await createFacultyAccount(f.name.value.trim(), f.email.value.trim().toLowerCase(), f.password.value, p.id);
           if (err) return err;
           showMessage(`Account created for ${p.name}. They log in with ${f.email.value.trim().toLowerCase()} and the temporary password, using "Login as Faculty".`, true);
           draw(); return "";
@@ -664,8 +684,10 @@ function adminFacultyPage(me) {
       const opts = ttProfiles().filter(p => p.id === cur || !linkedEmail(p.id)).map(p => `<option value="${esc(p.id)}"${p.id === cur ? " selected" : ""}>${esc(p.name)}${TT.some(f => f.id === p.id) ? "" : " (entered by admin)"}</option>`).join("");
       openDialog({ title: `Link ${u.name} to a timetable`, confirm: "Save link",
         body: `<div class="field"><label for="dLink">Name in the university timetable</label><select id="dLink" name="link">${opts}</select></div>`,
-        onConfirm: f => {
+        onConfirm: async f => {
+          try { await api(`/admin/faculty/${u.id}/link`, { profile_id: f.link.value }); } catch (err) { return err.message; }
           setAvail(u.email, { ...getAvail(u.email), ttId: f.link.value, off: {} });
+          await syncFaculty();
           timetableChanged(u.email, "linked your account to the timetable of " + ttFaculty(f.link.value).name);
           showMessage(`${u.name} now uses the timetable of ${ttFaculty(f.link.value).name}.`, true); draw(); return "";
         } });
@@ -674,33 +696,32 @@ function adminFacultyPage(me) {
       const u = getUsers().find(x => x.email === b.dataset.reset);
       openDialog({ title: `Reset password for ${u.name}`, confirm: "Set password",
         body: `<div class="field"><label for="dPass">New temporary password</label><input id="dPass" name="password" type="text" minlength="8" placeholder="At least 8 characters"></div>`,
-        onConfirm: f => {
-          if (f.password.value.length < 8) return "Use at least 8 characters.";
-          const users = getUsers(); users.find(x => x.email === u.email).password = f.password.value;
-          localStorage.setItem(USERS_KEY, JSON.stringify(users));
+        onConfirm: async f => {
+          try { await api(`/admin/faculty/${u.id}/password`, { password: f.password.value }); } catch (err) { return err.message; }
           showMessage(`Password reset for ${u.email}.`, true); return "";
         } });
     }
     if (b.dataset.remove) {
       const u = getUsers().find(x => x.email === b.dataset.remove), open = openFor(u.email);
       openDialog({ title: `Remove ${u.name}?`, confirm: "Remove faculty", danger: true,
-        body: `<p>The account is deleted and students can no longer book this faculty member.</p><p>${open.length} open request(s) or meeting(s) will be cancelled and the students notified. The timetable stays, so the account can be created again later.</p>`,
-        onConfirm: () => {
+        body: `<p>The account is deactivated and students can no longer book this faculty member. Past meetings keep their name.</p><p>${open.length} open request(s) or meeting(s) will be cancelled and the students notified. The timetable stays, so the account can be created again later.</p>`,
+        onConfirm: async () => {
+          try { await api(`/admin/faculty/${u.id}/deactivate`, {}); } catch (err) { return err.message; }
           open.forEach(bk => { const s = safeSession(bk);
             updateBooking(bk.id, x => { x.status = "Cancelled"; x.reschedule = null; logB(x, "Cancelled: faculty account removed by admin"); });
             notify(bk.studentEmail, "Booking cancelled", `${s.facultyName} is no longer available on CampusSync, so your meeting on ${whenText(s)} was cancelled. Please book another faculty member.`); });
-          localStorage.setItem(USERS_KEY, JSON.stringify(getUsers().filter(x => x.email !== u.email)));
           const av = loadObj(AVAIL); delete av[u.email]; save(AVAIL, av);
+          await syncFaculty();
           showMessage(`${u.name} removed. ${open.length} booking(s) cancelled.`, true); draw(); return "";
         } });
     }
   });
 
-  form.addEventListener("submit", e => {               // faculty who are not in the timetable files
+  form.addEventListener("submit", async e => {         // faculty who are not in the timetable files
     e.preventDefault();
     const name = form.name.value.trim(), email = form.email.value.trim().toLowerCase();
     const match = guessTtId(name);
-    const err = createFacultyAccount(name, email, form.password.value, "");
+    const err = await createFacultyAccount(name, email, form.password.value, "");
     if (err) return showMessage(err, false);
     form.reset();
     showMessage(match ? `${name} is in the university timetable, so the account was linked to those classes.`
@@ -996,6 +1017,7 @@ if (requiredRole) (async () => {
   if (!me || me.role !== requiredRole) {
     window.location.href = "index.html";
   } else {
+    try { await syncFaculty(); } catch { /* keep the cached list if the server is briefly unavailable */ }
     document.querySelectorAll("[data-user-name]").forEach(n => { n.textContent = me.name; });
     if (el("myAppts")) studentDashboard(me);
     if (el("upcomingAppts")) appointmentsPage(me);
