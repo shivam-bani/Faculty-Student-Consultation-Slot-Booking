@@ -3,18 +3,31 @@
 Serves the frontend from static/ and the JSON API under /api/.
 Run with:  python app.py   then open http://127.0.0.1:5000/
 """
+import os
+
 import mysql.connector
 from flask import Flask, jsonify
 
+import auth
 import commands
-import db
+import db  # also loads .env
 
 # static_url_path="" serves static/index.html at /index.html (not /static/index.html),
 # so the pages' relative links (style.css, script.js, book.html, ...) keep working unchanged.
 # Only files inside static/ are served: app.py, .env and the rest of the project are not reachable.
 app = Flask(__name__, static_folder="static", static_url_path="")
+
+if not os.getenv("SECRET_KEY"):
+    raise RuntimeError("SECRET_KEY is missing from .env. Run: python tools/setup_db.py")
+app.config.update(
+    SECRET_KEY=os.environ["SECRET_KEY"],  # signs the login cookie so the browser cannot change it
+    SESSION_COOKIE_HTTPONLY=True,         # page scripts cannot read the cookie
+    SESSION_COOKIE_SAMESITE="Lax",        # other sites cannot send it with their requests
+)
+
 db.init_app(app)
 commands.init_app(app)
+app.register_blueprint(auth.bp)
 
 
 @app.get("/")
