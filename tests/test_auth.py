@@ -87,6 +87,50 @@ class LoginTests(AuthTestCase):
         self.assertEqual(r.status_code, 400)
 
 
+class SignupTests(AuthTestCase):
+    EMAIL = "unittest-new@geu.ac.in"
+
+    def signup(self, **changes):
+        body = {"name": "New Student", "email": self.EMAIL, "password": PASSWORD, **changes}
+        return self.client.post("/api/auth/signup", json=body)
+
+    def test_signup_then_login(self):
+        r = self.signup(email="  UNITTEST-New@GEU.ac.in ")
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(r.get_json()["user"]["role"], "student")
+        self.assertEqual(r.get_json()["user"]["email"], self.EMAIL)  # stored in lower case
+        self.assertEqual(self.login(email=self.EMAIL).status_code, 200)
+
+    def test_password_is_stored_as_a_hash(self):
+        self.signup()
+        with app.app_context():
+            cur = db.get_db().cursor()
+            cur.execute("SELECT password_hash FROM users WHERE email = %s", (self.EMAIL,))
+            stored = cur.fetchone()[0]
+        self.assertTrue(stored.startswith("scrypt:"))
+        self.assertNotIn(PASSWORD, stored)
+
+    def test_only_college_emails(self):
+        for email in ["someone@gmail.com", "x@geu.ac.in.evil.com", "@geu.ac.in", "a b@geu.ac.in"]:
+            with self.subTest(email=email):
+                self.assertEqual(self.signup(email=email).status_code, 400)
+
+    def test_duplicate_email(self):
+        self.assertEqual(self.signup().status_code, 201)
+        r = self.signup(email=self.EMAIL.upper())
+        self.assertEqual(r.status_code, 409)
+        self.assertIn("already registered", r.get_json()["error"])
+
+    def test_bad_name_or_password(self):
+        self.assertEqual(self.signup(name="   ").status_code, 400)
+        self.assertEqual(self.signup(password="short").status_code, 400)
+        self.assertEqual(self.signup(password="x" * 129).status_code, 400)
+
+    def test_cannot_sign_up_as_admin(self):
+        r = self.signup(role="admin")  # extra fields are ignored: sign-up always creates a student
+        self.assertEqual(r.get_json()["user"]["role"], "student")
+
+
 class SessionTests(AuthTestCase):
     def test_role_always_comes_from_the_database(self):
         self.login()

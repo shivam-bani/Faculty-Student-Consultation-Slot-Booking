@@ -4,8 +4,10 @@ After login the browser holds a session cookie containing only the user's id. Fl
 cookie with SECRET_KEY, so it cannot be changed in the browser, and the user (with their role) is
 loaded from MySQL on every request, so the role is never taken from the browser.
 """
+import re
 from functools import wraps
 
+import mysql.connector
 from flask import Blueprint, abort, g, jsonify, make_response, request, session
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -14,6 +16,8 @@ import db
 bp = Blueprint("auth", __name__, url_prefix="/api/auth")
 
 LOGIN_FAILED = "Email or password is incorrect."
+STUDENT_EMAIL = re.compile(r"[^@\s]+@geu\.ac\.in")
+MIN_PASSWORD, MAX_PASSWORD = 8, 128
 # Checked when the email is unknown, so a wrong email takes as long as a wrong password and the
 # response time does not reveal which emails have accounts.
 DUMMY_HASH = generate_password_hash("not-a-real-password")
@@ -66,6 +70,33 @@ def login_required(*roles):
             return view(*args, **kwargs)
         return wrapped
     return decorator
+
+
+@bp.post("/signup")
+def signup():
+    """Students only; faculty accounts are created by the admin."""
+    data = json_body()
+    name = str(data.get("name", "")).strip()
+    email = str(data.get("email", "")).strip().lower()
+    password = str(data.get("password", ""))
+    if not 1 <= len(name) <= 100:
+        return error("Enter your full name (up to 100 characters).", 400)
+    if len(email) > 254 or not STUDENT_EMAIL.fullmatch(email):
+        return error("Use your college email address ending in @geu.ac.in.", 400)
+    if not MIN_PASSWORD <= len(password) <= MAX_PASSWORD:
+        return error(f"The password needs {MIN_PASSWORD} to {MAX_PASSWORD} characters.", 400)
+
+    conn = db.get_db()
+    cur = conn.cursor()
+    try:
+        cur.execute("INSERT INTO users (name, email, password_hash, role) VALUES (%s, %s, %s, 'student')",
+                    (name, email, generate_password_hash(password)))
+    except mysql.connector.IntegrityError as e:
+        if e.errno == 1062:  # duplicate key: uq_users_email
+            return error("This email is already registered. Please log in.", 409)
+        raise
+    conn.commit()
+    return make_response(jsonify(ok=True, user=public_user(cur.lastrowid, name, email, "student")), 201)
 
 
 @bp.post("/login")
