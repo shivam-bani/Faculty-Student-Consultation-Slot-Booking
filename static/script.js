@@ -465,33 +465,39 @@ function appointmentsPage(me) {
     fill("previousAppts", build(mine.filter(b => !isActive(b)).reverse(), false), 6, "No previous appointments.");
   }
 
-  el("upcomingAppts").addEventListener("click", e => {
+  // Each action is sent to the server; then the page reloads the server's data and redraws.
+  el("upcomingAppts").addEventListener("click", async e => {
     const btn = e.target.closest("button[data-act]");
     if (!btn) return;
     const b = load(BOOKINGS).find(x => x.id === btn.dataset.id), s = safeSession(b);
     if (btn.dataset.act === "resched") {
-      const opts = slotOptions(upcomingSlots(s.facultyEmail), b.sessionId);
+      const opts = slotOptions(await serverSlots(s.facultyEmail).catch(() => []), b.sessionId);
       openDialog({ title: "Request a new time", confirm: "Send request",
         body: `<p class="muted">Current slot: ${whenText(s)} with ${esc(s.facultyName)}. The faculty member approves or declines the change.</p>
           <div class="field"><label for="dlgSlot">New time</label><select id="dlgSlot" name="slot">${opts ? '<option value="">Choose a slot</option>' + opts : '<option value="">No other open slots</option>'}</select></div>
           <div class="field"><label for="dlgReason">Reason</label><textarea id="dlgReason" name="reason" placeholder="e.g. Clashes with my lab exam"></textarea></div>`,
-        onConfirm: f => {
+        onConfirm: async f => {
           if (!f.slot.value) return "Choose the new time you want.";
-          const label = f.slot.selectedOptions[0].parentElement.label + ", " + f.slot.selectedOptions[0].textContent.replace(/\s*\(.*\)$/, "");
-          updateBooking(b.id, x => { x.reschedule = { ref: f.slot.value, label, reason: f.reason.value.trim(), at: Date.now() }; logB(x, "Student asked to move to " + label); });
+          let label;
+          try {
+            ({ reschedule: { label } } = await api(`/bookings/${b.id}/reschedule`, { ref: f.slot.value, reason: f.reason.value.trim() }));
+          } catch (err) { return err.message; }
+          await syncFromServer();
           notify(s.facultyEmail, "Reschedule request", `${b.studentName} (token #${b.token}) asked to move from ${whenText(s)} to ${label}.` + (f.reason.value.trim() ? ` Reason: ${f.reason.value.trim()}` : ""));
           draw(); return "";
         } });
     }
     if (btn.dataset.act === "withdraw") {
-      updateBooking(b.id, x => { x.reschedule = null; logB(x, "Student withdrew the reschedule request"); });
+      try { await api(`/bookings/${b.id}/reschedule/withdraw`, {}); } catch (err) { alert(err.message); }
+      await syncFromServer();
       draw();
     }
     if (btn.dataset.act === "cancel") {
       openDialog({ title: "Cancel this booking?", confirm: "Cancel booking", danger: true,
         body: `<p>${esc(b.topic)} with ${esc(s.facultyName)} on ${whenText(s)}. Your seat is released for other students.</p>`,
-        onConfirm: () => {
-          updateBooking(b.id, x => { x.status = "Cancelled"; x.reschedule = null; logB(x, "Cancelled by student"); });
+        onConfirm: async () => {
+          try { await api(`/bookings/${b.id}/cancel`, {}); } catch (err) { return err.message; }
+          await syncFromServer();
           notify(s.facultyEmail, "Booking cancelled", `${b.studentName} cancelled token #${b.token} (${whenText(s)}).`);
           draw(); return "";
         } });
