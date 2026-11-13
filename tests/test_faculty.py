@@ -4,6 +4,7 @@ Run from the project folder (venv active):
     python -m unittest discover -s tests -v
 """
 import unittest
+from datetime import date, timedelta
 
 from werkzeug.security import generate_password_hash
 
@@ -30,7 +31,12 @@ def query_one(sql, params=()):
 
 
 def clean_up():
-    """Remove everything the tests create (users and timetables starting with 'unittest-')."""
+    """Remove everything the tests create (users and timetables starting with 'unittest-').
+    Order matters: bookings point to sessions and users, sessions point to users."""
+    execute("DELETE b FROM bookings b JOIN sessions s ON s.id = b.session_id JOIN users u ON u.id = s.faculty_id "
+            "WHERE u.email LIKE 'unittest-%'")
+    execute("DELETE b FROM bookings b JOIN users u ON u.id = b.student_id WHERE u.email LIKE 'unittest-%'")
+    execute("DELETE s FROM sessions s JOIN users u ON u.id = s.faculty_id WHERE u.email LIKE 'unittest-%'")
     execute("DELETE s FROM faculty_settings s JOIN users u ON u.id = s.faculty_id WHERE u.email LIKE 'unittest-%'")
     execute("DELETE FROM users WHERE email LIKE 'unittest-%'")
     execute("DELETE FROM timetable_profiles WHERE id LIKE 'unittest-%'")
@@ -252,6 +258,68 @@ class SettingsTests(FacultyTestCase):
         for path in ("settings", "slots-off", "slots-off/clear", "custom-slots"):
             with self.subTest(path=path):
                 self.assertEqual(self.post(path, client=student).status_code, 403)
+
+
+class BookableSlotsTests(FacultyTestCase):
+    """GET /api/faculty/<id>/slots with real sessions and bookings in MySQL."""
+
+    def setUp(self):
+        super().setUp()
+        self.fid = self.create().get_json()["faculty"]["id"]
+        self.admin.post(f"/api/admin/faculty/{self.fid}/settings", json={"slot_len": 30, "capacity": 3, "days": [1, 2, 3, 4, 5, 6]})
+        day = date.today() + timedelta(days=2)
+        while day.isoweekday() == 7:  # consultations run Monday to Saturday
+            day += timedelta(days=1)
+        self.day = day.isoformat()
+        # Three students: the database allows only one active booking per student per session.
+        self.students = [query_one("SELECT id FROM users WHERE email = 'unittest-student@geu.ac.in'")[0]]
+        for n in (2, 3):
+            self.students.append(execute("INSERT INTO users (name, email, password_hash, role) VALUES (%s, %s, 'x', 'student')",
+                                         (f"Student {n}", f"unittest-student{n}@geu.ac.in")))
+
+    def slots(self):
+        r = self.admin.get(f"/api/faculty/{self.fid}/slots")
+        self.assertEqual(r.status_code, 200)
+        return r.get_json()["slots"]
+
+    def add_session(self, start="08:00", end="08:30", source="timetable", cancelled=False):
+        return execute("INSERT INTO sessions (faculty_id, session_date, start_time, end_time, capacity, source, cancelled) "
+                       "VALUES (%s, %s, %s, %s, 3, %s, %s)", (self.fid, self.day, start, end, source, cancelled))
+
+    def add_booking(self, sid, token, status="Pending"):
+        execute("INSERT INTO bookings (session_id, student_id, token, topic, status) VALUES (%s, %s, %s, 'Test', %s)",
+                (sid, self.students[token - 1], token, status))
+
+    def at(self, start):
+        return [s for s in self.slots() if s["date"] == self.day and s["start"] == start]
+
+    def test_free_timetable_slot(self):
+        self.assertEqual(self.at("08:00"), [{"date": self.day, "start": "08:00", "end": "08:30", "capacity": 3, "seats": 3,
+                                             "topic": "Consultation hours", "session_id": None,
+                                             "ref": f"v:{self.fid}|{self.day}|08:00"}])
+
+    def test_booked_slot_shows_seats_left(self):
+        sid = self.add_session()
+        self.add_booking(sid, 1)
+        self.add_booking(sid, 2, status="Cancelled")  # a cancelled booking frees its seat
+        slot = self.at("08:00")
+        self.assertEqual([(s["ref"], s["seats"]) for s in slot], [(f"s:{sid}", 2)])
+
+    def test_full_or_cancelled_session_is_not_offered(self):
+        sid = self.add_session()
+        for token in (1, 2, 3):
+            self.add_booking(sid, token, status="Waiting")
+        self.assertEqual(self.at("08:00"), [])
+        self.add_session(start="09:00", end="09:30", cancelled=True)
+        self.assertEqual(self.at("09:00"), [])
+
+    def test_days_parameter_and_access(self):
+        self.assertEqual(self.admin.get(f"/api/faculty/{self.fid}/slots?days=0").status_code, 400)
+        self.assertEqual(self.admin.get(f"/api/faculty/{self.fid}/slots?days=x").status_code, 400)
+        self.assertEqual(self.admin.get("/api/faculty/999999999/slots").status_code, 404)
+        self.assertEqual(app.test_client().get(f"/api/faculty/{self.fid}/slots").status_code, 401)
+        student = self.client_for("unittest-student@geu.ac.in")
+        self.assertEqual(student.get(f"/api/faculty/{self.fid}/slots").status_code, 200)
 
 
 if __name__ == "__main__":

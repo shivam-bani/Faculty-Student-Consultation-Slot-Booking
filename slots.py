@@ -1,9 +1,12 @@
-"""Weekly consultation slots: the free time between a faculty member's classes.
+"""Consultation slots: the free time between a faculty member's classes, and what can be booked.
 
-This is the server's copy of weeklySlots() in static/script.js, line for line, so the server can
-check that a slot a student books really exists. Both must give the same answer: tests/test_slots.py
-checks the rules, and the browser test compares the two for real timetables.
+weekly_slots() and upcoming_slots() are the server's copies of weeklySlots() and upcomingSlots() in
+static/script.js, line for line, so the server can check that a slot a student books really exists.
+Both versions must give the same answer: tests/test_slots.py checks the rules, and the two were also
+compared on real timetables.
 """
+from datetime import timedelta
+
 DAY_START, DAY_END = "08:00", "17:55"  # college working hours used to find free time
 
 
@@ -49,3 +52,43 @@ def weekly_slots(settings, classes):
                                 "capacity": settings["capacity"], "kind": "auto", "off": key in off})
                 s += slot_len
     return sorted(out + custom, key=lambda x: (x["day"], to_min(x["start"])))  # stable, like JS sort
+
+
+def is_past(day, start, now):
+    """True when a slot on `day` (YYYY-MM-DD) starting at `start` (HH:MM) has begun or is over."""
+    today = now.date().isoformat()
+    return day < today or (day == today and start <= now.strftime("%H:%M"))
+
+
+def upcoming_slots(weekly, sessions, now, days=14):
+    """What a student can book with one faculty member, as in upcomingSlots() in script.js:
+    weekly slots for the next `days` days that are not switched off, in the past, or already turned
+    into a session, plus every future session that is not cancelled and still has seats.
+
+    weekly:   weekly_slots(...) for this faculty member
+    sessions: [{"id", "date", "start", "end", "capacity", "booked", "source", "cancelled", "topic"}, ...]
+              where booked = bookings that hold a seat (not Rejected or Cancelled)
+    now:      the current local datetime (passed in so tests can fix the time)
+    """
+    live = [s for s in sessions if not s["cancelled"]]
+    # A timetable slot that became a session is not offered again as a free slot, even if that
+    # session was later cancelled (same as script.js).
+    used = {f"{s['date']}|{s['start']}" for s in sessions if s["source"] == "timetable"}
+    open_weekly = [w for w in weekly if not w["off"]]
+    out = []
+    for i in range(days):
+        day = now.date() + timedelta(days=i)
+        date, weekday = day.isoformat(), day.isoweekday()  # 1 = Monday ... 7 = Sunday (never a consultation day)
+        for w in open_weekly:
+            if w["day"] != weekday or is_past(date, w["start"], now) or f"{date}|{w['start']}" in used:
+                continue
+            if any(s["date"] == date and overlaps(s["start"], s["end"], w["start"], w["end"]) for s in live):
+                continue
+            out.append({"date": date, "start": w["start"], "end": w["end"], "capacity": w["capacity"],
+                        "seats": w["capacity"], "topic": "Consultation hours", "session_id": None})
+    for s in live:
+        seats = s["capacity"] - s["booked"]
+        if not is_past(s["date"], s["start"], now) and seats > 0:
+            out.append({"date": s["date"], "start": s["start"], "end": s["end"], "capacity": s["capacity"],
+                        "seats": seats, "topic": s["topic"], "session_id": s["id"]})
+    return sorted(out, key=lambda x: x["date"] + x["start"])
