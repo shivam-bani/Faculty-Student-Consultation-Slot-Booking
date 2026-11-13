@@ -220,6 +220,26 @@ class SettingsTests(FacultyTestCase):
         self.assertEqual(self.admin.post(f"/api/admin/custom-slots/{r.get_json()['id']}/delete", json={}).status_code, 200)
         self.assertEqual(self.settings()["custom"], [])
 
+    def test_week_uses_the_timetable_and_settings(self):
+        execute("INSERT INTO timetable_classes (profile_id, day_of_week, start_time, end_time, code) "
+                "VALUES ('unittest-prof-a', 1, '10:00', '11:00', 'TCS-502')")
+        self.post("settings", {"slot_len": 30, "capacity": 4, "days": [1]})
+        self.post("slots-off", {"day": 1, "start": "08:00", "off": True})
+        student = self.client_for("unittest-student@geu.ac.in")  # every logged-in user may look
+        r = student.get(f"/api/faculty/{self.fid}/week")
+        self.assertEqual(r.status_code, 200)
+        week = r.get_json()
+        self.assertEqual([c["code"] for c in week["classes"]], ["TCS-502"])
+        starts = [s["start"] for s in week["slots"]]
+        self.assertIn("09:30", starts)
+        self.assertNotIn("10:00", starts)
+        self.assertEqual([s["start"] for s in week["slots"] if s["off"]], ["08:00"])
+        self.assertEqual({s["capacity"] for s in week["slots"]}, {4})
+
+    def test_week_for_unknown_or_logged_out(self):
+        self.assertEqual(self.admin.get("/api/faculty/999999999/week").status_code, 404)
+        self.assertEqual(app.test_client().get(f"/api/faculty/{self.fid}/week").status_code, 401)
+
     def test_only_admins(self):
         student = self.client_for("unittest-student@geu.ac.in")
         for path in ("settings", "slots-off", "slots-off/clear", "custom-slots"):

@@ -5,6 +5,7 @@
     POST /api/admin/faculty/<id>/link          link the account to another timetable
     POST /api/admin/faculty/<id>/password      set a new temporary password
     POST /api/admin/faculty/<id>/deactivate    remove from CampusSync (history is kept)
+    GET  /api/faculty/<id>/week                classes and weekly consultation slots
     POST /api/admin/faculty/<id>/settings      slot length, students per slot, consultation days
     POST /api/admin/faculty/<id>/slots-off     stop or start offering one weekly free slot
     POST /api/admin/faculty/<id>/slots-off/clear   offer all free slots again
@@ -18,6 +19,7 @@ from flask import Blueprint, abort, jsonify, make_response
 from werkzeug.security import generate_password_hash
 
 import db
+from slots import weekly_slots
 from auth import MAX_PASSWORD, MIN_PASSWORD, error, json_body, login_required
 
 bp = Blueprint("faculty", __name__, url_prefix="/api")
@@ -305,3 +307,20 @@ def delete_custom_slot(cid):
         return error("Extra slot not found.", 404)
     conn.commit()
     return jsonify(ok=True)
+
+
+@bp.get("/faculty/<int:fid>/week")
+@login_required()
+def week(fid):
+    """A faculty member's classes and the weekly consultation slots worked out from them."""
+    cur = db.get_db().cursor()
+    cur.execute(FACULTY_QUERY + " AND u.id = %s", (fid,))
+    row = cur.fetchone()
+    if row is None:
+        return error("Faculty account not found.", 404)
+    settings = all_settings(cur)[fid]
+    cur.execute("SELECT day_of_week, TIME_FORMAT(start_time, '%H:%i'), TIME_FORMAT(end_time, '%H:%i'), code, subject "
+                "FROM timetable_classes WHERE profile_id = %s ORDER BY day_of_week, start_time, id", (row[3],))
+    classes = [{"day": d, "start": s, "end": e, "code": code, "subject": subject} for d, s, e, code, subject in cur.fetchall()]
+    return jsonify(ok=True, faculty=faculty_json(row), settings=settings, classes=classes,
+                   slots=weekly_slots(settings, classes))
