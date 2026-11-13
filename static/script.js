@@ -594,13 +594,15 @@ const openFor = email => { const ids = load(SESSIONS).filter(s => s.facultyEmail
 function adminAccountPage(me) {
   setText("accEmail", me.email);
   const pf = el("pwForm");
-  pf.addEventListener("submit", e => {
+  pf.addEventListener("submit", async e => {
     e.preventDefault();
-    const users = getUsers(), u = users.find(x => x.email === me.email);
-    if (u.password !== pf.current.value) return showMessage("Current password is wrong.", false);
-    if (pf.next.value.length < 8) return showMessage("Use at least 8 characters for the new password.", false);
     if (pf.next.value !== pf.confirm.value) return showMessage("New passwords do not match.", false);
-    u.password = pf.next.value; localStorage.setItem(USERS_KEY, JSON.stringify(users));
+    try {
+      // The server checks the current password against its hash and the new password's length.
+      await api("/auth/password", { current: pf.current.value, new: pf.next.value });
+    } catch (err) {
+      return showMessage(err.message, false);
+    }
     pf.reset(); showMessage("Password changed.", true);
   });
 }
