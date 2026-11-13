@@ -6,6 +6,7 @@
     POST /api/admin/faculty/<id>/password      set a new temporary password
     POST /api/admin/faculty/<id>/deactivate    remove from CampusSync (history is kept)
     GET  /api/faculty/<id>/week                classes and weekly consultation slots
+    GET  /api/faculty/<id>/slots               what students can book in the next 14 days
     POST /api/admin/faculty/<id>/settings      slot length, students per slot, consultation days
     POST /api/admin/faculty/<id>/slots-off     stop or start offering one weekly free slot
     POST /api/admin/faculty/<id>/slots-off/clear   offer all free slots again
@@ -13,14 +14,15 @@
     POST /api/admin/custom-slots/<id>/delete   remove extra consultation hours
 """
 import re
+from datetime import datetime
 
 import mysql.connector
-from flask import Blueprint, abort, jsonify, make_response
+from flask import Blueprint, abort, jsonify, make_response, request
 from werkzeug.security import generate_password_hash
 
 import db
-from slots import weekly_slots
 from auth import MAX_PASSWORD, MIN_PASSWORD, error, json_body, login_required
+from slots import upcoming_slots, weekly_slots
 
 bp = Blueprint("faculty", __name__, url_prefix="/api")
 
@@ -313,18 +315,50 @@ def delete_custom_slot(cid):
     return jsonify(ok=True)
 
 
-@bp.get("/faculty/<int:fid>/week")
-@login_required()
-def week(fid):
-    """A faculty member's classes and the weekly consultation slots worked out from them."""
-    cur = db.get_db().cursor()
+def week_data(cur, fid):
+    """A faculty member's row, settings, classes and weekly slots (404 if not an active faculty member)."""
     cur.execute(FACULTY_QUERY + " AND u.id = %s", (fid,))
     row = cur.fetchone()
     if row is None:
-        return error("Faculty account not found.", 404)
+        abort(error("Faculty account not found.", 404))
     settings = all_settings(cur)[fid]
     cur.execute("SELECT day_of_week, TIME_FORMAT(start_time, '%H:%i'), TIME_FORMAT(end_time, '%H:%i'), code, subject "
                 "FROM timetable_classes WHERE profile_id = %s ORDER BY day_of_week, start_time, id", (row[3],))
     classes = [{"day": d, "start": s, "end": e, "code": code, "subject": subject} for d, s, e, code, subject in cur.fetchall()]
-    return jsonify(ok=True, faculty=faculty_json(row), settings=settings, classes=classes,
-                   slots=weekly_slots(settings, classes))
+    return row, settings, classes, weekly_slots(settings, classes)
+
+
+def sessions_of(cur, fid):
+    """The faculty member's sessions with the number of bookings holding a seat (not Rejected or Cancelled)."""
+    cur.execute("""
+        SELECT s.id, DATE_FORMAT(s.session_date, '%Y-%m-%d'), TIME_FORMAT(s.start_time, '%H:%i'),
+               TIME_FORMAT(s.end_time, '%H:%i'), s.capacity, s.source, s.cancelled, s.topic,
+               (SELECT COUNT(*) FROM bookings b WHERE b.session_id = s.id AND b.status NOT IN ('Rejected', 'Cancelled'))
+        FROM sessions s WHERE s.faculty_id = %s""", (fid,))
+    keys = ("id", "date", "start", "end", "capacity", "source", "cancelled", "topic", "booked")
+    return [dict(zip(keys, r)) for r in cur.fetchall()]
+
+
+@bp.get("/faculty/<int:fid>/week")
+@login_required()
+def week(fid):
+    """A faculty member's classes and the weekly consultation slots worked out from them."""
+    row, settings, classes, weekly = week_data(db.get_db().cursor(), fid)
+    return jsonify(ok=True, faculty=faculty_json(row), settings=settings, classes=classes, slots=weekly)
+
+
+@bp.get("/faculty/<int:fid>/slots")
+@login_required()
+def bookable_slots(fid):
+    """What a student can book with this faculty member in the next ?days= days (default 14).
+    Each slot has a ref: "v:<faculty id>|<date>|<start>" for a free timetable slot, or "s:<session id>"
+    for a session that already has bookings."""
+    days = request.args.get("days", "14")
+    if not days.isdigit() or not 1 <= int(days) <= 60:
+        return error("days must be a number from 1 to 60.", 400)
+    cur = db.get_db().cursor()
+    weekly = week_data(cur, fid)[3]
+    slots = upcoming_slots(weekly, sessions_of(cur, fid), datetime.now(), int(days))
+    for slot in slots:
+        slot["ref"] = f"s:{slot['session_id']}" if slot["session_id"] else f"v:{fid}|{slot['date']}|{slot['start']}"
+    return jsonify(ok=True, slots=slots)
