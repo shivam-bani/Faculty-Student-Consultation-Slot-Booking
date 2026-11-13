@@ -1,26 +1,33 @@
-// CampusSync demo (no backend). Everything is saved in THIS browser only (localStorage).
-// Not secure - for demonstration only. When the Flask backend is ready, replace the
-// functions in the DATA LAYER section below with fetch() calls to the backend.
+// CampusSync. Logins go to the Flask server (see api() below); the other data is still saved in
+// THIS browser (localStorage) while the backend is being connected. When the Flask backend is
+// ready for a feature, the functions in the DATA LAYER section are replaced with api() calls.
 //
 // Page wiring: every page loads timetable-data.js (the university timetable, as data)
 // and then this file. Each page is detected by an element id (see the bottom of the file).
 
 const USERS_KEY = "campussync_users";
-const CURRENT_KEY = "campussync_current";
 
 function getUsers() {
   return JSON.parse(localStorage.getItem(USERS_KEY) || "[]");
 }
-function getCurrent() {
-  return JSON.parse(localStorage.getItem(CURRENT_KEY) || "null");
+
+// ---------- Server API ----------
+// Calls the Flask backend (same site, so the login cookie is sent automatically). GET when there
+// is no body, POST with JSON otherwise. Returns the response data, or throws an Error whose message
+// is the server's explanation, ready to show to the user.
+async function api(path, body) {
+  const options = body === undefined ? {}
+    : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+  let res;
+  try {
+    res = await fetch("/api" + path, options);
+  } catch {
+    throw Object.assign(new Error("Cannot reach the server. Is it running?"), { status: 0 });
+  }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.ok) throw Object.assign(new Error(data.error || `Server error (${res.status}).`), { status: res.status });
+  return data;
 }
-// A built-in admin account exists from the first visit, so there is always someone who can add
-// faculty. Change its password on the Admin Dashboard. (Demo only: real logins need a backend.)
-const DEFAULT_ADMIN = { name: "CampusSync Admin", email: "admin@campussync.edu", password: "Admin@1234", role: "admin" };
-(function ensureAdmin() {
-  const users = getUsers();
-  if (!users.some(u => u.role === "admin")) { users.push(DEFAULT_ADMIN); localStorage.setItem(USERS_KEY, JSON.stringify(users)); }
-})();
 
 function showMessage(text, ok) {
   const box = document.getElementById("formMsg");
@@ -56,23 +63,19 @@ if (signupForm) {
 // ---------- Login ----------
 const loginForm = document.getElementById("loginForm");
 if (loginForm) {
-  localStorage.removeItem(CURRENT_KEY);               // opening the login page = logged out
-  loginForm.addEventListener("submit", function (e) {
+  // Opening the login page = logged out. Kept as a promise so a quick login waits for it,
+  // otherwise the logout could arrive after the login and end the new session.
+  const loggedOut = api("/auth/logout", {}).catch(() => {});
+  loginForm.addEventListener("submit", async function (e) {
     e.preventDefault();
     const role = e.submitter.value;                    // "student", "faculty" or "admin"
-    const email = loginForm.email.value.trim().toLowerCase();
-    const password = loginForm.password.value;
-
-    const account = getUsers().find(u => u.email === email);
-    if (!account) return showMessage(role === "student" ? "No account with this email. Sign up first."
-      : role === "faculty" ? "No faculty account with this email. Ask the admin to create one under Admin > Faculty."
-      : "No admin account with this email. Use the admin email given in README.md.", false);
-    if (account.password !== password) return showMessage("Wrong password for " + email + ".", false);
-    const user = account;
-    if (user.role !== role) return showMessage("This email belongs to a " + user.role + " account. Use the \"Login as " + user.role.charAt(0).toUpperCase() + user.role.slice(1) + "\" button.", false);
-
-    localStorage.setItem(CURRENT_KEY, JSON.stringify({ name: user.name, email: user.email, role: user.role }));
-    window.location.href = homeFor(role);
+    await loggedOut;
+    try {
+      const { user } = await api("/auth/login", { email: loginForm.email.value, password: loginForm.password.value, role });
+      window.location.href = homeFor(user.role);
+    } catch (err) {
+      showMessage(err.message, false);                 // e.g. "Email or password is incorrect."
+    }
   });
 
   const resetBtn = document.getElementById("resetData");
@@ -985,9 +988,12 @@ function navBadge(me) {                               // unread count next to "N
 }
 
 // ================= Protected pages: show the logged-in name, block wrong role =================
+// The server says who is logged in (from the signed cookie), so editing localStorage cannot
+// change the user or the role.
 const requiredRole = document.body.dataset.role;
-if (requiredRole) {
-  const me = getCurrent();
+if (requiredRole) (async () => {
+  let me = null;
+  try { me = (await api("/auth/me")).user; } catch { /* not logged in, or server down */ }
   if (!me || me.role !== requiredRole) {
     window.location.href = "index.html";
   } else {
@@ -1005,4 +1011,4 @@ if (requiredRole) {
     if (el("noteList")) renderNotes(me);
     navBadge(me);
   }
-}
+})();
