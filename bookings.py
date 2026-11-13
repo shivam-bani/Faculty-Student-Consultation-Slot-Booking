@@ -3,6 +3,9 @@
     GET  /api/bookings       the sessions and bookings this user may see, in the shape script.js uses
     GET  /api/profile        the student's saved details (to fill in the booking form)
     POST /api/bookings       a student books a slot (one locked transaction; see book())
+    POST /api/bookings/<id>/cancel                 the student cancels their booking
+    POST /api/bookings/<id>/reschedule             the student asks the faculty member for another time
+    POST /api/bookings/<id>/reschedule/withdraw    the student withdraws that request
 """
 import re
 from datetime import datetime
@@ -90,6 +93,20 @@ def list_bookings():
                     f"WHERE booking_id IN ({', '.join(['%s'] * len(ids))}) ORDER BY id", ids)
         for bid, at, text in cur.fetchall():
             bookings[str(bid)]["history"].append({"at": ms(at), "text": text})
+        # Open reschedule requests. The ref points at the session now at that time, if there is one.
+        cur.execute(f"""
+            SELECT r.booking_id, DATE_FORMAT(r.req_date, '%Y-%m-%d'), TIME_FORMAT(r.req_start, '%H:%i'),
+                   TIME_FORMAT(r.req_end, '%H:%i'), r.reason, UNIX_TIMESTAMP(r.requested_at) * 1000, s.faculty_id, t.id, t.topic
+            FROM reschedule_requests r
+            JOIN bookings b ON b.id = r.booking_id
+            JOIN sessions s ON s.id = b.session_id
+            LEFT JOIN sessions t ON t.faculty_id = s.faculty_id AND t.session_date = r.req_date
+                                AND t.start_time = r.req_start AND NOT t.cancelled
+            WHERE r.booking_id IN ({', '.join(['%s'] * len(ids))})""", ids)
+        for bid, date, start, end, reason, at, fid, target, topic in cur.fetchall():
+            bookings[str(bid)]["reschedule"] = {
+                "ref": f"s:{target}" if target else f"v:{fid}|{date}|{start}",
+                "label": slot_label(date, start, end, topic or "Consultation hours"), "reason": reason, "at": ms(at)}
     return jsonify(ok=True, sessions=sessions, bookings=list(bookings.values()))
 
 
@@ -280,3 +297,95 @@ def book_once(conn, student, profile, ref, topic, desc, ctype, now):
         raise
     return make_response(jsonify(ok=True, booking={"id": str(bid), "sessionId": str(sid), "token": token,
                                                    "basePriority": priority, "status": "Pending"}), 201)
+
+
+DAY_NAMES = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def slot_label(date, start, end, topic="Consultation hours"):
+    """The same text the page builds for a slot, e.g. "Monday, 16 Nov 2026, 09:00 - 09:30"."""
+    d = datetime.strptime(date, "%Y-%m-%d").date()
+    label = f"{DAY_NAMES[d.weekday()]}, {d.day} {MONTHS[d.month - 1]} {d.year}, {start} - {end}"
+    return label + (f" · {topic}" if topic != "Consultation hours" else "")
+
+
+def own_active_booking(cur, bid):
+    """The logged-in student's booking, locked, if it is still Pending or Accepted and not over.
+    Someone else's booking is reported as not found, so its existence is not revealed."""
+    cur.execute("SELECT b.id, b.status, b.session_id, s.faculty_id, DATE_FORMAT(s.session_date, '%Y-%m-%d'), "
+                "TIME_FORMAT(s.end_time, '%H:%i') FROM bookings b JOIN sessions s ON s.id = b.session_id "
+                "WHERE b.id = %s AND b.student_id = %s FOR UPDATE", (bid, current_user()["id"]))
+    row = cur.fetchone()
+    if row is None:
+        abort(error("Booking not found.", 404))
+    if row[1] not in ("Pending", "Waiting") or has_started(row[4], row[5], datetime.now()):
+        abort(error("This booking can no longer be changed.", 409))
+    return {"id": row[0], "session_id": row[2], "faculty_id": row[3]}
+
+
+def log(cur, bid, text):
+    cur.execute("INSERT INTO booking_history (booking_id, text) VALUES (%s, %s)", (bid, text[:255]))
+
+
+@bp.post("/bookings/<int:bid>/cancel")
+@login_required("student")
+def cancel(bid):
+    json_body()
+    conn = db.get_db()
+    cur = conn.cursor()
+    own_active_booking(cur, bid)
+    cur.execute("UPDATE bookings SET status = 'Cancelled' WHERE id = %s", (bid,))  # frees the seat; the token is not reused
+    cur.execute("DELETE FROM reschedule_requests WHERE booking_id = %s", (bid,))
+    log(cur, bid, "Cancelled by student")
+    conn.commit()
+    return jsonify(ok=True)
+
+
+@bp.post("/bookings/<int:bid>/reschedule")
+@login_required("student")
+def request_reschedule(bid):
+    """Ask for another bookable slot with the same faculty member; the faculty member decides (Step 12)."""
+    data = json_body()
+    ref, reason = str(data.get("ref", "")), str(data.get("reason", "")).strip()
+    if len(reason) > 255:
+        return error("Keep the reason under 255 characters.", 400)
+    conn = db.get_db()
+    cur = conn.cursor()
+    booking = own_active_booking(cur, bid)
+    v, s = VIRTUAL_REF.fullmatch(ref), SESSION_REF.fullmatch(ref)
+    offered = upcoming_slots(week_data(cur, booking["faculty_id"])[3], sessions_of(cur, booking["faculty_id"]), datetime.now())
+    if v and int(v.group(1)) == booking["faculty_id"]:
+        slot = next((x for x in offered if x["session_id"] is None and (x["date"], x["start"]) == (v.group(2), v.group(3))), None)
+    elif s:
+        slot = next((x for x in offered if x["session_id"] == int(s.group(1))), None)
+    else:
+        return error("Choose the new time you want.", 400)
+    if slot is None:
+        return error("That slot is no longer available. Choose another one.", 409)
+    if slot["session_id"] == booking["session_id"]:
+        return error("That is your current slot.", 400)
+    # One open request per booking (booking_id is the primary key), so a new request replaces the old one.
+    cur.execute("INSERT INTO reschedule_requests (booking_id, req_date, req_start, req_end, reason) VALUES (%s, %s, %s, %s, %s) "
+                "ON DUPLICATE KEY UPDATE req_date = VALUES(req_date), req_start = VALUES(req_start), req_end = VALUES(req_end), "
+                "reason = VALUES(reason), requested_at = CURRENT_TIMESTAMP", (bid, slot["date"], slot["start"], slot["end"], reason))
+    label = slot_label(slot["date"], slot["start"], slot["end"], slot["topic"])
+    log(cur, bid, "Student asked to move to " + label)
+    conn.commit()
+    return jsonify(ok=True, reschedule={"ref": ref, "label": label, "reason": reason})
+
+
+@bp.post("/bookings/<int:bid>/reschedule/withdraw")
+@login_required("student")
+def withdraw_reschedule(bid):
+    json_body()
+    conn = db.get_db()
+    cur = conn.cursor()
+    own_active_booking(cur, bid)
+    cur.execute("DELETE FROM reschedule_requests WHERE booking_id = %s", (bid,))
+    if cur.rowcount == 0:
+        conn.rollback()
+        return error("There is no reschedule request to withdraw.", 409)
+    log(cur, bid, "Student withdrew the reschedule request")
+    conn.commit()
+    return jsonify(ok=True)
