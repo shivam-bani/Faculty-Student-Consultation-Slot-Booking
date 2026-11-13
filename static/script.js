@@ -215,7 +215,9 @@ async function createFacultyAccount(name, email, password, ttId) {   // returns 
 // the browser for now. It runs on every page load and after every admin change, so the server stays
 // the source of truth. It also strips passwords that older browser-only versions stored in the cache.
 async function syncFromServer() {
-  const [{ timetables }, { faculty }] = await Promise.all([api("/timetables"), api("/faculty")]);
+  const [{ timetables }, { faculty }, { sessions, bookings }] = await Promise.all([api("/timetables"), api("/faculty"), api("/bookings")]);
+  save(SESSIONS, sessions);                          // only what this user may see (the server decides)
+  save(BOOKINGS, bookings);
   const st = {};
   timetables.forEach(t => { st[t.id] = { name: t.name, edited: t.edited, classes: t.classes }; });
   save(TTS, st);
@@ -290,6 +292,15 @@ function upcomingSlots(email, nDays = 14) {
     if (seats > 0) out.push({ ref: "s:" + s.id, facultyEmail: email, date: s.date, start: s.start, end: s.end, capacity: s.capacity, seats, topic: s.topic, sessionId: s.id });
   });
   return out.sort((x, y) => (x.date + x.start).localeCompare(y.date + y.start));
+}
+// What students can book with a faculty member, worked out by the server from MySQL with the same
+// rules as upcomingSlots() above (which the reschedule dialogs still use).
+async function serverSlots(email) {
+  const f = getUsers().find(u => u.role === "faculty" && u.email === email);
+  if (!f) return [];
+  const { slots } = await api(`/faculty/${f.id}/slots`);
+  return slots.map(s => ({ ref: s.ref, facultyEmail: email, date: s.date, start: s.start, end: s.end, capacity: s.capacity,
+    seats: s.seats, topic: s.topic, ...(s.session_id ? { sessionId: String(s.session_id) } : {}) }));
 }
 const slotText = s => `${DAY_SHORT[dowOf(s.date)]} ${fmtDate(s.date)} · ${s.start} - ${s.end} (${s.seats} seat${s.seats === 1 ? "" : "s"} left)`;
 function slotOptions(list, skipSessionId) {
@@ -497,58 +508,52 @@ function bookPage(me) {
     ? '<option value="">Select a faculty member</option>' + faculty.map(f => `<option value="${esc(f.email)}">${esc(f.name)}</option>`).join("")
     : '<option value="">No faculty registered yet</option>';
 
-  // Prefill student details from the last booking (saved on the user record).
-  const prof = (getUsers().find(u => u.email === me.email) || {}).profile || {};
-  form.fullName.value = prof.name || me.name;
-  ["studentId", "rollNo", "course", "semester", "section", "groupId"].forEach(k => { if (prof[k]) form[k].value = prof[k]; });
+  // Prefill the student's details from their saved profile (one profile per student, on the server).
+  form.fullName.value = me.name;
+  api("/profile").then(({ profile }) => {
+    if (profile) ["studentId", "rollNo", "course", "semester", "section", "groupId"].forEach(k => { if (profile[k]) form[k].value = profile[k]; });
+  }).catch(() => { /* the details can still be typed in */ });
 
-  form.faculty.addEventListener("change", () => {
-    const list = upcomingSlots(form.faculty.value);
+  let slots = [];                                      // the server's bookable slots for the chosen faculty member
+  async function showSlots() {
+    slots = form.faculty.value ? await serverSlots(form.faculty.value).catch(() => []) : [];
     form.slot.innerHTML = !form.faculty.value ? '<option value="">Choose a faculty first</option>'
-      : list.length ? '<option value="">Select a time slot</option>' + slotOptions(list) : '<option value="">No open slots for this faculty</option>';
+      : slots.length ? '<option value="">Select a time slot</option>' + slotOptions(slots) : '<option value="">No open slots for this faculty</option>';
     form.date.value = ""; form.capacity.value = "";
-  });
+  }
+  form.faculty.addEventListener("change", showSlots);
   form.slot.addEventListener("change", () => {
-    const s = upcomingSlots(form.faculty.value).find(x => x.ref === form.slot.value);
+    const s = slots.find(x => x.ref === form.slot.value);
     form.date.value = s ? `${DAY_LONG[dowOf(s.date)]}, ${fmtDate(s.date)}` : "";
     form.capacity.value = s ? `${s.seats} of ${s.capacity} seats available` : "";
   });
   if (params.get("faculty")) {                         // arriving from Available Slots
     form.faculty.value = params.get("faculty");
-    form.faculty.dispatchEvent(new Event("change"));
-    if (params.get("slot")) { form.slot.value = params.get("slot"); form.slot.dispatchEvent(new Event("change")); }
+    showSlots().then(() => {
+      if (params.get("slot")) { form.slot.value = params.get("slot"); form.slot.dispatchEvent(new Event("change")); }
+    });
   }
 
-  form.addEventListener("submit", e => {
+  form.addEventListener("submit", async e => {
     e.preventDefault();
-    const ref = form.slot.value;
-    if (!ref) return showMessage("Please choose a time slot.", false);
-    const slot = upcomingSlots(form.faculty.value).find(x => x.ref === ref);
-    if (!slot) return showMessage("This slot is no longer available. Please choose another one.", false);
-    const all = load(BOOKINGS);
-    const clash = all.find(b => b.studentEmail === me.email && isActive(b) && (() => { const s = safeSession(b); return s.date === slot.date && overlaps(s.start, s.end, slot.start, slot.end); })());
-    if (clash) return showMessage(`You already have a consultation at that time (token #${clash.token}). Choose a different slot.`, false);
-    const s = ensureSession(ref);
-    if (!s) return showMessage("This slot is no longer available. Please choose another one.", false);
-    if (seatsLeft(s) <= 0) return showMessage("This session is full.", false);
-    if (load(BOOKINGS).some(b => b.sessionId === s.id && b.studentEmail === me.email && isActive(b)))
-      return showMessage("You have already booked this session.", false);
-
-    const student = { name: form.fullName.value.trim(), studentId: form.studentId.value.trim().toUpperCase(), rollNo: form.rollNo.value.trim().toUpperCase(),
+    const ref = form.slot.value, slot = slots.find(x => x.ref === ref);
+    if (!ref || !slot) return showMessage("Please choose a time slot.", false);
+    const student = { studentId: form.studentId.value.trim().toUpperCase(), rollNo: form.rollNo.value.trim().toUpperCase(),
                       course: form.course.value, semester: form.semester.value, section: form.section.value.trim().toUpperCase(),
                       groupId: form.groupId.value.trim().toUpperCase() };
-    const users = getUsers(), u = users.find(x => x.email === me.email);
-    if (u) { u.profile = student; localStorage.setItem(USERS_KEY, JSON.stringify(users)); }
-
-    const token = nextToken(s.id);                     // next token for this session
-    const list = load(BOOKINGS);
-    list.push({ id: "b" + Date.now(), sessionId: s.id, studentEmail: me.email, studentName: student.name, student,
-                topic: form.topic.value.trim(), desc: form.desc.value.trim(), token, status: "Pending", createdAt: Date.now(),
-                reschedule: null, history: [{ at: Date.now(), text: "Requested by student" }] });
-    save(BOOKINGS, list);
-    notify(me.email, "Booking request sent", `Your request to ${s.facultyName} for ${whenText(s)} is waiting for approval. Your token is #${token}.`);
-    notify(s.facultyEmail, "New booking request", `${student.name} (${student.rollNo}, ${student.course}) requested "${form.topic.value.trim()}" on ${whenText(s)} (token #${token}).`);
-    if (seatsLeft(s) <= 0) notify(s.facultyEmail, "Capacity reached", `${whenText(s)} is now fully booked.`);
+    let booking;
+    try {
+      // One locked transaction on the server: checks seats, an existing booking and time clashes,
+      // gives the next token and works out the priority from the semester and consultation type.
+      ({ booking } = await api("/bookings", { ref, topic: form.topic.value, desc: form.desc.value,
+                                              consultationType: form.ctype.value, profile: student }));
+    } catch (err) {
+      return showMessage(err.message, false);           // e.g. "This session is full."
+    }
+    const fac = faculty.find(f => f.email === form.faculty.value), token = booking.token;
+    notify(me.email, "Booking request sent", `Your request to ${fac.name} for ${whenText(slot)} is waiting for approval. Your token is #${token}.`);
+    notify(fac.email, "New booking request", `${me.name} (${student.rollNo}, ${student.course}) requested "${form.topic.value.trim()}" on ${whenText(slot)} (token #${token}).`);
+    if (slot.seats <= 1) notify(fac.email, "Capacity reached", `${whenText(slot)} is now fully booked.`);
     showMessage(`Request sent. Your token is #${token}. Redirecting...`, true);
     setTimeout(() => { window.location.href = "appointments.html"; }, 1200);
   });
@@ -559,7 +564,7 @@ function slotsPage(me) {
   const faculty = getUsers().filter(u => u.role === "faculty");
   pick.innerHTML = faculty.length ? faculty.map(f => `<option value="${esc(f.email)}">${esc(f.name)}</option>`).join("")
                                   : '<option value="">No faculty registered yet</option>';
-  function draw() {
+  async function draw() {
     const email = pick.value;
     if (!email) {
       el("weekGrid").innerHTML = '<p class="muted">Slots appear here once faculty members create their accounts.</p>';
@@ -568,7 +573,8 @@ function slotsPage(me) {
     setText("slotInfo", classesOf(email).length ? "Grey blocks are this faculty member's classes. Highlighted times are open for consultation."
       : "No timetable has been entered for this faculty member yet, so all working hours are shown. The faculty member accepts or reschedules each request.");
     renderWeek(el("weekGrid"), email, false);
-    const list = upcomingSlots(email);
+    const list = await serverSlots(email).catch(() => []);
+    if (pick.value !== email) return;                  // another faculty member was chosen meanwhile
     const dates = [...new Set(list.map(s => s.date))];
     const keep = dayPick.value;
     dayPick.innerHTML = '<option value="">All dates</option>' + dates.map(d => `<option value="${d}">${DAY_SHORT[dowOf(d)]} ${fmtDate(d)} (${list.filter(s => s.date === d).length})</option>`).join("");
