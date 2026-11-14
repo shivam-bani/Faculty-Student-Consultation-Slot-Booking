@@ -51,17 +51,33 @@ sees them only on the browser where the faculty member acted.
   If a change makes an already booked meeting clash with a class, the faculty member is
   notified and the meeting is flagged on their Booking Requests page.
 
-**Faculty** (Booking Requests, My Timetable, Calendar, Notifications)
+**Faculty** (Booking Requests, Live Queue, My Timetable, Calendar, Notifications)
 - Accept, reject or reschedule requests; reschedule or cancel accepted meetings;
   approve or decline a student's request to change time.
+- Live Queue: the students who pressed "I'm here", in calling order, with waiting time and
+  priority. **Call next** finishes the current student and calls the next one in.
 - My Timetable is read-only; the admin maintains it.
 
 **Student** (Dashboard, Available Slots, Book Consultation, My Appointments, Calendar, Notifications)
 - Free time between a faculty member's classes is offered automatically as slots;
-  nobody creates sessions by hand. The student requests a slot with their details.
+  nobody creates sessions by hand. The student requests a slot with their details and the
+  consultation type (General or Major project).
+- On the day, from `CHECKIN_EARLY_MINUTES` before the slot until it ends, an accepted student
+  presses **I'm here** on My Appointments and sees their place in the queue.
 
-Status flow: Pending -> Accepted -> Completed (automatically after the meeting time),
-or Rejected / Cancelled, or Expired (never answered before the meeting time).
+### Queue manager (`queue_manager.py`)
+A slot is served one student at a time, like one CPU shared by processes.
+- Base priority 2 for semester VII/VIII **Major project** consultations, otherwise 1 (set by the
+  server when booking; the semester comes from the student's own profile).
+- Waiting starts at check-in. **Aging:** priority + 1 for every completed `AGING_MINUTES` of
+  waiting, so a long-waiting student overtakes newer high-priority ones (no starvation).
+- Call next picks the highest priority, then the earliest check-in, then the lowest token, in
+  one locked transaction; at most one student can be "In Session" per slot.
+- Both settings are in `.env` (default 10 minutes each). For a classroom demo set
+  `AGING_MINUTES=1` and restart `python app.py`.
+
+Status flow: Pending -> Accepted -> (I'm here) -> In Session -> Completed, or Rejected / Cancelled.
+When the slot's time is over: never answered -> Expired, accepted but never called in -> Missed.
 
 ## Files
 - `static/`: the pages, `style.css`, `script.js` and `timetable-data.js`, served by Flask.
@@ -69,7 +85,8 @@ or Rejected / Cancelled, or Expired (never answered before the meeting time).
   `schema.sql` (tables and constraints), `tools/setup_db.py` (database setup), `tests/`.
 - API: `auth.py` (sign up, login, roles), `faculty.py` (faculty accounts and settings),
   `timetable.py` (timetable editing), `slots.py` (free-slot calculation), `bookings.py`
-  (booking in one locked transaction, student and faculty actions).
+  (booking in one locked transaction, student and faculty actions), `queue_manager.py`
+  (check-in, priority with aging, call next).
 - `static/timetable-data.js`: imported faculty schedules (contact numbers deliberately excluded).
   The admin's edits are stored separately, so this file is only the starting point.
 - `tools/build_timetable_data.py`: rebuilds it when a new timetable is published.
