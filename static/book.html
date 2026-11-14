@@ -78,6 +78,13 @@
             <label for="topic">PBL consultation topic</label>
             <input id="topic" name="topic" type="text" placeholder="e.g. Project progress review" required>
           </div>
+          <div class="field wide">
+            <label for="ctype">Consultation type <span class="opt">(final-year Major project consultations are seen first)</span></label>
+            <select id="ctype" name="ctype" required>
+              <option value="General">General</option>
+              <option value="Major project">Major project</option>
+            </select>
+          </div>
           <div class="field">
             <label for="slot">Available time slot</label>
             <select id="slot" name="slot" required><option value="">Choose a faculty first</option></select>

@@ -215,7 +215,9 @@ async function createFacultyAccount(name, email, password, ttId) {   // returns 
 // the browser for now. It runs on every page load and after every admin change, so the server stays
 // the source of truth. It also strips passwords that older browser-only versions stored in the cache.
 async function syncFromServer() {
-  const [{ timetables }, { faculty }] = await Promise.all([api("/timetables"), api("/faculty")]);
+  const [{ timetables }, { faculty }, { sessions, bookings }] = await Promise.all([api("/timetables"), api("/faculty"), api("/bookings")]);
+  save(SESSIONS, sessions);                          // only what this user may see (the server decides)
+  save(BOOKINGS, bookings);
   const st = {};
   timetables.forEach(t => { st[t.id] = { name: t.name, edited: t.edited, classes: t.classes }; });
   save(TTS, st);
@@ -269,27 +271,14 @@ function weeklySlots(email) {
   return out.concat(custom).sort((x, y) => x.day - y.day || toMin(x.start) - toMin(y.start));
 }
 
-// Bookable slots for one faculty member: timetable slots for the next nDays that are not yet
-// turned into sessions, plus every future session (created or from the timetable) with seats left.
-function upcomingSlots(email, nDays = 14) {
-  const sessions = load(SESSIONS).filter(s => s.facultyEmail === email);
-  const live = sessions.filter(s => !s.cancelled);
-  const used = new Set(sessions.map(s => s.origKey).filter(Boolean));
-  const weekly = weeklySlots(email).filter(w => !w.off);
-  const out = [];
-  for (let i = 0; i < nDays; i++) {
-    const date = addDays(today(), i), dw = dowOf(date);
-    weekly.filter(w => w.day === dw).forEach(w => {
-      if (isPast(date, w.start) || used.has(date + "|" + w.start)) return;
-      if (live.some(s => s.date === date && overlaps(s.start, s.end, w.start, w.end))) return;
-      out.push({ ref: `v:${email}|${date}|${w.start}|${w.end}|${w.capacity}`, facultyEmail: email, date, start: w.start, end: w.end, capacity: w.capacity, seats: w.capacity, topic: "Consultation hours" });
-    });
-  }
-  live.filter(s => !isPast(s.date, s.start)).forEach(s => {
-    const seats = seatsLeft(s);
-    if (seats > 0) out.push({ ref: "s:" + s.id, facultyEmail: email, date: s.date, start: s.start, end: s.end, capacity: s.capacity, seats, topic: s.topic, sessionId: s.id });
-  });
-  return out.sort((x, y) => (x.date + x.start).localeCompare(y.date + y.start));
+// What students can book with a faculty member (the next 14 days), worked out by the server from
+// MySQL: timetable slots not yet turned into sessions, plus future sessions with seats left.
+async function serverSlots(email) {
+  const f = getUsers().find(u => u.role === "faculty" && u.email === email);
+  if (!f) return [];
+  const { slots } = await api(`/faculty/${f.id}/slots`);
+  return slots.map(s => ({ ref: s.ref, facultyEmail: email, date: s.date, start: s.start, end: s.end, capacity: s.capacity,
+    seats: s.seats, topic: s.topic, ...(s.session_id ? { sessionId: String(s.session_id) } : {}) }));
 }
 const slotText = s => `${DAY_SHORT[dowOf(s.date)]} ${fmtDate(s.date)} · ${s.start} - ${s.end} (${s.seats} seat${s.seats === 1 ? "" : "s"} left)`;
 function slotOptions(list, skipSessionId) {
@@ -299,51 +288,9 @@ function slotOptions(list, skipSessionId) {
     byDate[d].map(s => `<option value="${esc(s.ref)}">${s.start} - ${s.end}${s.topic !== "Consultation hours" ? " · " + esc(s.topic) : ""} (${s.seats} left)</option>`).join("") + "</optgroup>").join("");
 }
 
-// Turn a slot reference into a real session record (timetable slots become sessions on first booking).
-function ensureSession(ref) {
-  if (ref.startsWith("s:")) {
-    const s = load(SESSIONS).find(x => x.id === ref.slice(2));
-    return s && !s.cancelled ? s : null;
-  }
-  const [email, date, start, end, cap] = ref.slice(2).split("|");
-  if (!upcomingSlots(email).some(x => x.ref === ref)) return null;     // turned off, taken or in the past
-  const fac = getUsers().find(u => u.email === email);
-  const s = { id: "s" + Date.now() + Math.floor(Math.random() * 1000), facultyEmail: email, facultyName: fac ? fac.name : email,
-              topic: "Consultation hours", desc: "From the faculty member's weekly timetable", date, start, end,
-              capacity: Number(cap), source: "timetable", origKey: date + "|" + start };
-  const all = load(SESSIONS); all.push(s); save(SESSIONS, all);
-  return s;
-}
-const nextToken = sessionId => Math.max(0, ...load(BOOKINGS).filter(b => b.sessionId === sessionId).map(b => b.token)) + 1;
-
-// ---- booking actions (used by students and faculty) ----
-function updateBooking(id, fn) {
-  const all = load(BOOKINGS), b = all.find(x => x.id === id);
-  if (!b) return null;
-  fn(b); save(BOOKINGS, all);
-  return b;
-}
-const logB = (b, text) => { (b.history = b.history || []).push({ at: Date.now(), text }); };
+// Bookings are created and changed only by the server (bookings.py); pages call the API and then
+// reload their copy with syncFromServer().
 const whenText = s => `${fmtDate(s.date)}, ${s.start} - ${s.end}`;
-
-function moveBooking(id, ref, byFaculty, note) {      // returns an error message, or "" when done
-  const b0 = load(BOOKINGS).find(x => x.id === id);
-  if (!b0) return "Booking not found.";
-  const target = ensureSession(ref);
-  if (!target) return "That slot is no longer available. Choose another one.";
-  if (target.id === b0.sessionId) return "The booking is already in that slot.";
-  if (seatsLeft(target) <= 0) return "That slot is full. Choose another one.";
-  const token = nextToken(target.id);
-  const b = updateBooking(id, x => {
-    x.sessionId = target.id; x.token = token; x.reschedule = null;
-    if (x.status === "Pending" && byFaculty) x.status = "Waiting";    // a faculty reschedule also accepts the request
-    logB(x, `Moved to ${whenText(target)}${byFaculty ? " by faculty" : ""}`);
-  });
-  const msg = `Your consultation with ${target.facultyName} is now on ${whenText(target)}. New token #${token}.` + (note ? ` Note: ${note}` : "");
-  notify(b.studentEmail, "Consultation rescheduled", msg);
-  if (!byFaculty) notify(target.facultyEmail, "Booking moved", `${b.studentName}'s booking moved to ${whenText(target)}.`);
-  return "";
-}
 
 // ---- shared dialog (used for reschedule / reject / cancel / details) ----
 function openDialog({ title, body, confirm, danger, onConfirm, onOpen, extra }) {
@@ -454,33 +401,39 @@ function appointmentsPage(me) {
     fill("previousAppts", build(mine.filter(b => !isActive(b)).reverse(), false), 6, "No previous appointments.");
   }
 
-  el("upcomingAppts").addEventListener("click", e => {
+  // Each action is sent to the server; then the page reloads the server's data and redraws.
+  el("upcomingAppts").addEventListener("click", async e => {
     const btn = e.target.closest("button[data-act]");
     if (!btn) return;
     const b = load(BOOKINGS).find(x => x.id === btn.dataset.id), s = safeSession(b);
     if (btn.dataset.act === "resched") {
-      const opts = slotOptions(upcomingSlots(s.facultyEmail), b.sessionId);
+      const opts = slotOptions(await serverSlots(s.facultyEmail).catch(() => []), b.sessionId);
       openDialog({ title: "Request a new time", confirm: "Send request",
         body: `<p class="muted">Current slot: ${whenText(s)} with ${esc(s.facultyName)}. The faculty member approves or declines the change.</p>
           <div class="field"><label for="dlgSlot">New time</label><select id="dlgSlot" name="slot">${opts ? '<option value="">Choose a slot</option>' + opts : '<option value="">No other open slots</option>'}</select></div>
           <div class="field"><label for="dlgReason">Reason</label><textarea id="dlgReason" name="reason" placeholder="e.g. Clashes with my lab exam"></textarea></div>`,
-        onConfirm: f => {
+        onConfirm: async f => {
           if (!f.slot.value) return "Choose the new time you want.";
-          const label = f.slot.selectedOptions[0].parentElement.label + ", " + f.slot.selectedOptions[0].textContent.replace(/\s*\(.*\)$/, "");
-          updateBooking(b.id, x => { x.reschedule = { ref: f.slot.value, label, reason: f.reason.value.trim(), at: Date.now() }; logB(x, "Student asked to move to " + label); });
+          let label;
+          try {
+            ({ reschedule: { label } } = await api(`/bookings/${b.id}/reschedule`, { ref: f.slot.value, reason: f.reason.value.trim() }));
+          } catch (err) { return err.message; }
+          await syncFromServer();
           notify(s.facultyEmail, "Reschedule request", `${b.studentName} (token #${b.token}) asked to move from ${whenText(s)} to ${label}.` + (f.reason.value.trim() ? ` Reason: ${f.reason.value.trim()}` : ""));
           draw(); return "";
         } });
     }
     if (btn.dataset.act === "withdraw") {
-      updateBooking(b.id, x => { x.reschedule = null; logB(x, "Student withdrew the reschedule request"); });
+      try { await api(`/bookings/${b.id}/reschedule/withdraw`, {}); } catch (err) { alert(err.message); }
+      await syncFromServer();
       draw();
     }
     if (btn.dataset.act === "cancel") {
       openDialog({ title: "Cancel this booking?", confirm: "Cancel booking", danger: true,
         body: `<p>${esc(b.topic)} with ${esc(s.facultyName)} on ${whenText(s)}. Your seat is released for other students.</p>`,
-        onConfirm: () => {
-          updateBooking(b.id, x => { x.status = "Cancelled"; x.reschedule = null; logB(x, "Cancelled by student"); });
+        onConfirm: async () => {
+          try { await api(`/bookings/${b.id}/cancel`, {}); } catch (err) { return err.message; }
+          await syncFromServer();
           notify(s.facultyEmail, "Booking cancelled", `${b.studentName} cancelled token #${b.token} (${whenText(s)}).`);
           draw(); return "";
         } });
@@ -497,58 +450,52 @@ function bookPage(me) {
     ? '<option value="">Select a faculty member</option>' + faculty.map(f => `<option value="${esc(f.email)}">${esc(f.name)}</option>`).join("")
     : '<option value="">No faculty registered yet</option>';
 
-  // Prefill student details from the last booking (saved on the user record).
-  const prof = (getUsers().find(u => u.email === me.email) || {}).profile || {};
-  form.fullName.value = prof.name || me.name;
-  ["studentId", "rollNo", "course", "semester", "section", "groupId"].forEach(k => { if (prof[k]) form[k].value = prof[k]; });
+  // Prefill the student's details from their saved profile (one profile per student, on the server).
+  form.fullName.value = me.name;
+  api("/profile").then(({ profile }) => {
+    if (profile) ["studentId", "rollNo", "course", "semester", "section", "groupId"].forEach(k => { if (profile[k]) form[k].value = profile[k]; });
+  }).catch(() => { /* the details can still be typed in */ });
 
-  form.faculty.addEventListener("change", () => {
-    const list = upcomingSlots(form.faculty.value);
+  let slots = [];                                      // the server's bookable slots for the chosen faculty member
+  async function showSlots() {
+    slots = form.faculty.value ? await serverSlots(form.faculty.value).catch(() => []) : [];
     form.slot.innerHTML = !form.faculty.value ? '<option value="">Choose a faculty first</option>'
-      : list.length ? '<option value="">Select a time slot</option>' + slotOptions(list) : '<option value="">No open slots for this faculty</option>';
+      : slots.length ? '<option value="">Select a time slot</option>' + slotOptions(slots) : '<option value="">No open slots for this faculty</option>';
     form.date.value = ""; form.capacity.value = "";
-  });
+  }
+  form.faculty.addEventListener("change", showSlots);
   form.slot.addEventListener("change", () => {
-    const s = upcomingSlots(form.faculty.value).find(x => x.ref === form.slot.value);
+    const s = slots.find(x => x.ref === form.slot.value);
     form.date.value = s ? `${DAY_LONG[dowOf(s.date)]}, ${fmtDate(s.date)}` : "";
     form.capacity.value = s ? `${s.seats} of ${s.capacity} seats available` : "";
   });
   if (params.get("faculty")) {                         // arriving from Available Slots
     form.faculty.value = params.get("faculty");
-    form.faculty.dispatchEvent(new Event("change"));
-    if (params.get("slot")) { form.slot.value = params.get("slot"); form.slot.dispatchEvent(new Event("change")); }
+    showSlots().then(() => {
+      if (params.get("slot")) { form.slot.value = params.get("slot"); form.slot.dispatchEvent(new Event("change")); }
+    });
   }
 
-  form.addEventListener("submit", e => {
+  form.addEventListener("submit", async e => {
     e.preventDefault();
-    const ref = form.slot.value;
-    if (!ref) return showMessage("Please choose a time slot.", false);
-    const slot = upcomingSlots(form.faculty.value).find(x => x.ref === ref);
-    if (!slot) return showMessage("This slot is no longer available. Please choose another one.", false);
-    const all = load(BOOKINGS);
-    const clash = all.find(b => b.studentEmail === me.email && isActive(b) && (() => { const s = safeSession(b); return s.date === slot.date && overlaps(s.start, s.end, slot.start, slot.end); })());
-    if (clash) return showMessage(`You already have a consultation at that time (token #${clash.token}). Choose a different slot.`, false);
-    const s = ensureSession(ref);
-    if (!s) return showMessage("This slot is no longer available. Please choose another one.", false);
-    if (seatsLeft(s) <= 0) return showMessage("This session is full.", false);
-    if (load(BOOKINGS).some(b => b.sessionId === s.id && b.studentEmail === me.email && isActive(b)))
-      return showMessage("You have already booked this session.", false);
-
-    const student = { name: form.fullName.value.trim(), studentId: form.studentId.value.trim().toUpperCase(), rollNo: form.rollNo.value.trim().toUpperCase(),
+    const ref = form.slot.value, slot = slots.find(x => x.ref === ref);
+    if (!ref || !slot) return showMessage("Please choose a time slot.", false);
+    const student = { studentId: form.studentId.value.trim().toUpperCase(), rollNo: form.rollNo.value.trim().toUpperCase(),
                       course: form.course.value, semester: form.semester.value, section: form.section.value.trim().toUpperCase(),
                       groupId: form.groupId.value.trim().toUpperCase() };
-    const users = getUsers(), u = users.find(x => x.email === me.email);
-    if (u) { u.profile = student; localStorage.setItem(USERS_KEY, JSON.stringify(users)); }
-
-    const token = nextToken(s.id);                     // next token for this session
-    const list = load(BOOKINGS);
-    list.push({ id: "b" + Date.now(), sessionId: s.id, studentEmail: me.email, studentName: student.name, student,
-                topic: form.topic.value.trim(), desc: form.desc.value.trim(), token, status: "Pending", createdAt: Date.now(),
-                reschedule: null, history: [{ at: Date.now(), text: "Requested by student" }] });
-    save(BOOKINGS, list);
-    notify(me.email, "Booking request sent", `Your request to ${s.facultyName} for ${whenText(s)} is waiting for approval. Your token is #${token}.`);
-    notify(s.facultyEmail, "New booking request", `${student.name} (${student.rollNo}, ${student.course}) requested "${form.topic.value.trim()}" on ${whenText(s)} (token #${token}).`);
-    if (seatsLeft(s) <= 0) notify(s.facultyEmail, "Capacity reached", `${whenText(s)} is now fully booked.`);
+    let booking;
+    try {
+      // One locked transaction on the server: checks seats, an existing booking and time clashes,
+      // gives the next token and works out the priority from the semester and consultation type.
+      ({ booking } = await api("/bookings", { ref, topic: form.topic.value, desc: form.desc.value,
+                                              consultationType: form.ctype.value, profile: student }));
+    } catch (err) {
+      return showMessage(err.message, false);           // e.g. "This session is full."
+    }
+    const fac = faculty.find(f => f.email === form.faculty.value), token = booking.token;
+    notify(me.email, "Booking request sent", `Your request to ${fac.name} for ${whenText(slot)} is waiting for approval. Your token is #${token}.`);
+    notify(fac.email, "New booking request", `${me.name} (${student.rollNo}, ${student.course}) requested "${form.topic.value.trim()}" on ${whenText(slot)} (token #${token}).`);
+    if (slot.seats <= 1) notify(fac.email, "Capacity reached", `${whenText(slot)} is now fully booked.`);
     showMessage(`Request sent. Your token is #${token}. Redirecting...`, true);
     setTimeout(() => { window.location.href = "appointments.html"; }, 1200);
   });
@@ -559,7 +506,7 @@ function slotsPage(me) {
   const faculty = getUsers().filter(u => u.role === "faculty");
   pick.innerHTML = faculty.length ? faculty.map(f => `<option value="${esc(f.email)}">${esc(f.name)}</option>`).join("")
                                   : '<option value="">No faculty registered yet</option>';
-  function draw() {
+  async function draw() {
     const email = pick.value;
     if (!email) {
       el("weekGrid").innerHTML = '<p class="muted">Slots appear here once faculty members create their accounts.</p>';
@@ -568,7 +515,8 @@ function slotsPage(me) {
     setText("slotInfo", classesOf(email).length ? "Grey blocks are this faculty member's classes. Highlighted times are open for consultation."
       : "No timetable has been entered for this faculty member yet, so all working hours are shown. The faculty member accepts or reschedules each request.");
     renderWeek(el("weekGrid"), email, false);
-    const list = upcomingSlots(email);
+    const list = await serverSlots(email).catch(() => []);
+    if (pick.value !== email) return;                  // another faculty member was chosen meanwhile
     const dates = [...new Set(list.map(s => s.date))];
     const keep = dayPick.value;
     dayPick.innerHTML = '<option value="">All dates</option>' + dates.map(d => `<option value="${d}">${DAY_SHORT[dowOf(d)]} ${fmtDate(d)} (${list.filter(s => s.date === d).length})</option>`).join("");
@@ -707,13 +655,13 @@ function adminFacultyPage(me) {
       openDialog({ title: `Remove ${u.name}?`, confirm: "Remove faculty", danger: true,
         body: `<p>The account is deactivated and students can no longer book this faculty member. Past meetings keep their name.</p><p>${open.length} open request(s) or meeting(s) will be cancelled and the students notified. The timetable stays, so the account can be created again later.</p>`,
         onConfirm: async () => {
-          try { await api(`/admin/faculty/${u.id}/deactivate`, {}); } catch (err) { return err.message; }
-          open.forEach(bk => { const s = safeSession(bk);
-            updateBooking(bk.id, x => { x.status = "Cancelled"; x.reschedule = null; logB(x, "Cancelled: faculty account removed by admin"); });
+          let res;                                          // the server cancels the open bookings itself
+          try { res = await api(`/admin/faculty/${u.id}/deactivate`, {}); } catch (err) { return err.message; }
+          open.filter(bk => res.cancelled.includes(bk.id)).forEach(bk => { const s = safeSession(bk);
             notify(bk.studentEmail, "Booking cancelled", `${s.facultyName} is no longer available on CampusSync, so your meeting on ${whenText(s)} was cancelled. Please book another faculty member.`); });
           const av = loadObj(AVAIL); delete av[u.email]; save(AVAIL, av);
           await syncFromServer();
-          showMessage(`${u.name} removed. ${open.length} booking(s) cancelled.`, true); draw(); return "";
+          showMessage(`${u.name} removed. ${res.cancelled.length} booking(s) cancelled.`, true); draw(); return "";
         } });
     }
   });
@@ -897,9 +845,21 @@ function requestsPage(me) {
     fill("closedReqs", list.filter(b => !isActive(b)).reverse().map(b => row(L.slice(0, 5), cells(b))).join(""), 5, "No closed requests yet.");
   }
 
-  function moveDialog(b) {
+  // Every action is done by the server; the page then reloads its copy and tells the student.
+  async function send(b, action, body) {
+    const res = await api(`/faculty/bookings/${b.id}/${action}`, body || {});
+    await syncFromServer();
+    return res;
+  }
+  function notifyMoved(b, res, note) {
+    const t = load(SESSIONS).find(x => x.id === res.booking.sessionId);
+    notify(b.studentEmail, "Consultation rescheduled", `Your consultation with ${t.facultyName} is now on ${whenText(t)}. New token #${res.booking.token}.` + (note ? ` Note: ${note}` : ""));
+  }
+
+  async function moveDialog(b) {
     const s = safeSession(b);
-    const opts = slotOptions(upcomingSlots(me.email), b.sessionId);
+    let opts;
+    try { opts = slotOptions(await serverSlots(me.email), b.sessionId); } catch (err) { showMessage(err.message, false); return; }
     openDialog({ title: `Reschedule ${b.studentName}`, confirm: "Reschedule",
       body: `<p class="muted">Now: ${whenText(s)}, token #${b.token}. Rescheduling also accepts a pending request.</p>
         <div class="field"><label for="dlgSlot">Move to</label><select id="dlgSlot" name="slot"><option value="">Choose a slot</option>${opts}<option value="custom">Another date and time...</option></select></div>
@@ -908,23 +868,21 @@ function requestsPage(me) {
           <div class="field"><label for="dlgEnd">End time</label><input id="dlgEnd" name="end" type="time"></div></div>
         <div class="field"><label for="dlgNote">Message to the student (optional)</label><textarea id="dlgNote" name="note"></textarea></div>`,
       onOpen: f => f.slot.addEventListener("change", () => { f.querySelector("#dlgCustom").hidden = f.slot.value !== "custom"; }),
-      onConfirm: f => {
-        let ref = f.slot.value;
-        if (!ref) return "Choose where to move the booking.";
-        if (ref === "custom") {
+      onConfirm: async f => {
+        const note = f.note.value.trim(), body = { ref: f.slot.value, note };
+        if (!body.ref) return "Choose where to move the booking.";
+        if (body.ref === "custom") {                   // the server checks these again
           const date = f.date.value, start = f.start.value, end = f.end.value;
           if (!date || !start || !end) return "Fill in the date, start and end time.";
           if (end <= start) return "End time must be after start time.";
           if (isPast(date, start)) return "Choose a time in the future.";
           const cl = classClash(me.email, dowOf(date), start, end);
           if (cl && !confirm(`This overlaps your class ${cl.code} (${cl.start} - ${cl.end}). Use this time anyway?`)) return "Pick a time that does not clash with your class.";
-          const all = load(SESSIONS);
-          const ns = { id: "s" + Date.now(), facultyEmail: me.email, facultyName: me.name, topic: "Rescheduled consultation", desc: "Created while rescheduling a booking",
-                       date, start, end, capacity: 1, source: "created" };
-          all.push(ns); save(SESSIONS, all); ref = "s:" + ns.id;
+          Object.assign(body, { ref: "", date, start, end });  // the server makes a one-student session at that time
         }
-        const err = moveBooking(b.id, ref, true, f.note.value.trim());
-        if (err) return err;
+        let res;
+        try { res = await send(b, "move", body); } catch (err) { return err.message; }
+        notifyMoved(b, res, note);
         showMessage(`${b.studentName} moved and notified.`, true); draw(); return "";
       } });
   }
@@ -932,37 +890,41 @@ function requestsPage(me) {
     const s = safeSession(b), reject = kind === "reject";
     openDialog({ title: reject ? "Reject this request?" : "Cancel this booking?", confirm: reject ? "Reject request" : "Cancel booking", danger: true,
       body: `<p>${esc(b.studentName)}, ${esc(b.topic)}, ${whenText(s)}.</p><div class="field"><label for="dlgNote">Reason (sent to the student)</label><textarea id="dlgNote" name="note" placeholder="${reject ? "e.g. Please discuss this with your project mentor first" : "e.g. I am on official duty that day"}"></textarea></div>`,
-      onConfirm: f => {
+      onConfirm: async f => {
         const note = f.note.value.trim();
-        updateBooking(b.id, x => { x.status = reject ? "Rejected" : "Cancelled"; x.reschedule = null; logB(x, (reject ? "Rejected" : "Cancelled") + " by faculty" + (note ? ": " + note : "")); });
+        try { await send(b, kind, { note }); } catch (err) { return err.message; }
         notify(b.studentEmail, reject ? "Request rejected" : "Booking cancelled", `${s.facultyName} ${reject ? "rejected your request" : "cancelled your booking"} for ${whenText(s)} (token #${b.token}).` + (note ? ` Reason: ${note}` : "") + " You can book another slot.");
         draw(); return "";
       } });
   }
 
-  document.querySelector("main").addEventListener("click", e => {
+  document.querySelector("main").addEventListener("click", async e => {
     const btn = e.target.closest("button[data-act]");
     if (!btn || !btn.dataset.id) return;
     const b = load(BOOKINGS).find(x => x.id === btn.dataset.id), s = safeSession(b);
-    switch (btn.dataset.act) {
-      case "details": return openDialog({ title: "Booking details", body: studentDetailsHTML(b) });
-      case "accept":
-        updateBooking(b.id, x => { x.status = "Waiting"; logB(x, "Accepted by faculty"); });
-        notify(b.studentEmail, "Request accepted", `${s.facultyName} accepted your consultation on ${whenText(s)}. Token #${b.token}.`);
-        showMessage(`Accepted ${b.studentName}.`, true); return draw();
-      case "reject": return reasonDialog(b, "reject");
-      case "cancel": return reasonDialog(b, "cancel");
-      case "move": return moveDialog(b);
-      case "approve": {
-        const err = moveBooking(b.id, b.reschedule.ref, true, "");
-        if (err) { showMessage(err + " Use Reschedule to pick a different slot.", false); return; }
-        showMessage(`Moved ${b.studentName} to the requested time.`, true); return draw();
+    try {
+      switch (btn.dataset.act) {
+        case "details": return openDialog({ title: "Booking details", body: studentDetailsHTML(b) });
+        case "accept":
+          await send(b, "accept");
+          notify(b.studentEmail, "Request accepted", `${s.facultyName} accepted your consultation on ${whenText(s)}. Token #${b.token}.`);
+          showMessage(`Accepted ${b.studentName}.`, true); return draw();
+        case "reject": return reasonDialog(b, "reject");
+        case "cancel": return reasonDialog(b, "cancel");
+        case "move": return await moveDialog(b);
+        case "approve": {
+          let res;
+          try { res = await send(b, "approve-reschedule"); }
+          catch (err) { showMessage(err.message + " Use Reschedule to pick a different slot.", false); return; }
+          notifyMoved(b, res, "");
+          showMessage(`Moved ${b.studentName} to the requested time.`, true); return draw();
+        }
+        case "decline":
+          await send(b, "decline-reschedule");
+          notify(b.studentEmail, "Reschedule declined", `${s.facultyName} kept your consultation on ${whenText(s)} (token #${b.token}).`);
+          return draw();
       }
-      case "decline":
-        updateBooking(b.id, x => { x.reschedule = null; logB(x, "Reschedule request declined by faculty"); });
-        notify(b.studentEmail, "Reschedule declined", `${s.facultyName} kept your consultation on ${whenText(s)} (token #${b.token}).`);
-        return draw();
-    }
+    } catch (err) { showMessage(err.message, false); await syncFromServer(); draw(); }
   });
   draw();
 }

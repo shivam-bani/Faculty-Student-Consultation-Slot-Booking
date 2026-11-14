@@ -22,9 +22,10 @@ python app.py
 ```
 Then open http://127.0.0.1:5000/. Tests: `python -m unittest discover -s tests -v` (needs MySQL running).
 
-The backend is being connected step by step. Accounts, logins, faculty, timetables and
-consultation settings are on the server (MySQL); bookings and notifications are still kept in
-the browser for now.
+The backend is being connected step by step. Accounts, logins, faculty, timetables,
+consultation settings and bookings (booking, cancelling, rescheduling, faculty decisions) are on
+the server (MySQL). Notifications are still kept in the browser for now (Step 14), so a student
+sees them only on the browser where the faculty member acted.
 
 ## Logging in
 - **Admin:** created with `flask --app app create-admin` (there is no built-in admin). Click
@@ -64,17 +65,20 @@ or Rejected / Cancelled, or Expired (never answered before the meeting time).
 
 ## Files
 - `static/`: the pages, `style.css`, `script.js` and `timetable-data.js`, served by Flask.
-- `app.py` (Flask app and API), `db.py` (MySQL connection), `commands.py` (`flask` commands),
+- `app.py` (Flask app), `db.py` (MySQL connection), `commands.py` (`flask` commands),
   `schema.sql` (tables and constraints), `tools/setup_db.py` (database setup), `tests/`.
+- API: `auth.py` (sign up, login, roles), `faculty.py` (faculty accounts and settings),
+  `timetable.py` (timetable editing), `slots.py` (free-slot calculation), `bookings.py`
+  (booking in one locked transaction, student and faculty actions).
 - `static/timetable-data.js`: imported faculty schedules (contact numbers deliberately excluded).
   The admin's edits are stored separately, so this file is only the starting point.
 - `tools/build_timetable_data.py`: rebuilds it when a new timetable is published.
 - `tools/verify_timetable_data.py`: checks the data against the source files
   (current result: 270/270 PDF subject codes placed correctly, 1526/1526 class periods present).
-- When timetable-data.js changes, browsers refresh their copy on the next page load; timetables
-  the admin edited by hand are kept.
+- When timetable-data.js changes, run `flask --app app import-timetable` again; timetables the
+  admin edited by hand are kept.
 
 ## Known limitations (demo)
-- localStorage only (one browser); passwords are stored in plain text. Replace the
-  DATA LAYER in script.js with a backend before real use.
-- Students' own class clashes are not checked yet.
+- Notifications are still stored per browser (moved to the server in Step 14).
+- The student's semester is self-reported in their profile (used for Major project priority).
+- Students' own class clashes are not checked yet (only clashes with their other bookings).
