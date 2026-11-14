@@ -1,15 +1,15 @@
-// CampusSync. Logins go to the Flask server (see api() below); the other data is still saved in
-// THIS browser (localStorage) while the backend is being connected. When the Flask backend is
-// ready for a feature, the functions in the DATA LAYER section are replaced with api() calls.
+// CampusSync. All data lives on the Flask server (MySQL); this file only talks to its API (api()
+// below) and draws the pages. Nothing is saved in the browser: each page loads what this user may
+// see into an in-memory cache (syncFromServer()), which is gone when the page is closed.
 //
 // Page wiring: every page loads timetable-data.js (the university timetable, as data)
 // and then this file. Each page is detected by an element id (see the bottom of the file).
 
-const USERS_KEY = "campussync_users";
-
-function getUsers() {
-  return JSON.parse(localStorage.getItem(USERS_KEY) || "[]");
-}
+// Earlier versions kept their data in localStorage; remove those leftovers (they could hold other
+// people's bookings on a shared computer).
+try {
+  Object.keys(localStorage).filter(k => k.startsWith("campussync_")).forEach(k => localStorage.removeItem(k));
+} catch { /* storage blocked: nothing to remove */ }
 
 // ---------- Server API ----------
 // Calls the Flask backend (same site, so the login cookie is sent automatically). GET when there
@@ -74,22 +74,18 @@ if (loginForm) {
       showMessage(err.message, false);                 // e.g. "Email or password is incorrect."
     }
   });
-
-  const resetBtn = document.getElementById("resetData");
-  if (resetBtn) resetBtn.addEventListener("click", () => {
-    if (!confirm("Delete all accounts, bookings, notifications and timetable edits saved in this browser?")) return;
-    Object.keys(localStorage).filter(k => k.startsWith("campussync_")).forEach(k => localStorage.removeItem(k));
-    location.reload();
-  });
-
 }
 
-// ================= DATA LAYER (replace with backend calls later) =================
-const SESSIONS = "campussync_sessions", BOOKINGS = "campussync_bookings", NOTES = "campussync_notes";
-const AVAIL = "campussync_availability";             // per-faculty timetable link + slot settings
-const load = key => JSON.parse(localStorage.getItem(key) || "[]");
-const save = (key, value) => localStorage.setItem(key, JSON.stringify(value));
-const loadObj = key => JSON.parse(localStorage.getItem(key) || "{}");
+// ================= DATA CACHE (filled from the server by syncFromServer) =================
+const USERS = "users", SESSIONS = "sessions", BOOKINGS = "bookings", NOTES = "notes";
+const AVAIL = "availability";                        // per-faculty timetable link + slot settings
+const TTS = "timetables";                            // { profileId: { name, edited, classes: [...] } }
+const CACHE = {};
+// load() returns a copy, so a page can change what it got without changing the cache by accident.
+const load = key => structuredClone(CACHE[key] ?? []);
+const save = (key, value) => { CACHE[key] = value; };
+const loadObj = key => structuredClone(CACHE[key] ?? {});
+const getUsers = () => load(USERS);                  // the active faculty accounts
 
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const fmtDate = d => new Date(d + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
@@ -135,13 +131,8 @@ const holdsSeat = b => b.status !== "Cancelled" && b.status !== "Rejected";
 const shownStatus = b => (effStatus(b) === "Waiting" ? "Accepted" : effStatus(b));
 const statusLabel = b => (b.reschedule && isActive(b) ? "Reschedule requested" : shownStatus(b));
 const statusPills = b => `<div class="pills">${pill(shownStatus(b))}${effStatus(b) === "Waiting" && b.checkedInAt ? pill("Checked in") : ""}${b.reschedule && isActive(b) ? pill("Reschedule requested") : ""}</div>`;
-// Timetable slots become sessions only when booked; hide those whose bookings all moved away.
-const hasBookings = s => s.source !== "timetable" || load(BOOKINGS).some(b => b.sessionId === s.id);
 const sessionOf = b => load(SESSIONS).find(s => s.id === b.sessionId);
 const safeSession = b => sessionOf(b) || { facultyName: "-", topic: "-", date: today(), start: "-", end: "-", capacity: 0 };
-const bookedCount = s => load(BOOKINGS).filter(b => b.sessionId === s.id && holdsSeat(b)).length;
-const seatsLeft = s => s.capacity - bookedCount(s);
-const sessionStatus = s => (s.cancelled ? "Cancelled" : seatsLeft(s) > 0 ? "Open" : "Full");
 
 // The place comes from the server's queue (priority, aging, check-in time), not from the token.
 function queuePosition(b) {
@@ -173,10 +164,9 @@ function renderNotes(me) {
 }
 
 // ================= TIMETABLE + AVAILABILITY =================
-// TIMETABLE (timetable-data.js) is the imported university timetable. The admin edits a working
-// copy kept under TTS: { profileId: { name, classes: [{ id, day, start, end, code, subject, section, room }] } }.
+// TIMETABLE (timetable-data.js) is the university timetable file; the admin page uses it to list
+// everyone in it and to offer "restore". The timetables actually used are the ones in MySQL (TTS).
 const TT = typeof TIMETABLE !== "undefined" ? TIMETABLE.faculty : [];
-const TTS = "campussync_timetable";
 const DAY_START = "08:00", DAY_END = "17:55";      // college working hours used to find free time
 
 function nameKey(n) {                                // "Dr. Neeraj Kumar Pandey" -> "neeraj-kumar-pandey"
@@ -187,19 +177,7 @@ function nameKey(n) {                                // "Dr. Neeraj Kumar Pandey
   k = k.trim().replace(/ /g, "-");
   return k === "om-prakash-pal" ? "op-pal" : k;
 }
-const importedProfile = f => ({ name: f.name, classes: f.classes.map((c, i) => ({ id: f.id + "-" + i,
-  day: c[0], start: c[1], end: c[2], code: c[3], subject: c[4], section: c[5], room: c[6] })) });
-function ttStore() {
-  let st = loadObj(TTS);
-  const version = typeof TIMETABLE !== "undefined" ? TIMETABLE.version || "1" : "";
-  if (version && localStorage.getItem(TTS + "_version") !== version) {
-    // New or corrected timetable file: reload every imported profile the admin has not edited.
-    TT.forEach(f => { if (!st[f.id] || !st[f.id].edited) st[f.id] = importedProfile(f); });
-    save(TTS, st); localStorage.setItem(TTS + "_version", version);
-  }
-  return st;
-}
-if (TT.length) ttStore();                             // apply timetable corrections as soon as any page loads
+const ttStore = () => loadObj(TTS);                  // the timetables in MySQL (flask import-timetable loads the file)
 const ttProfiles = () => Object.entries(ttStore()).map(([id, p]) => ({ id, ...p })).sort((a, b) => nameKey(a.name).localeCompare(nameKey(b.name)));
 const guessTtId = name => (ttStore()[nameKey(name)] ? nameKey(name) : "");
 const linkedEmail = id => (getUsers().find(u => u.role === "faculty" && getAvail(u.email).ttId === id) || {}).email || "";
@@ -220,10 +198,8 @@ async function createFacultyAccount(name, email, password, ttId) {   // returns 
   return "";
 }
 
-// Faculty accounts, timetables and consultation settings live on the server. This copies them into
-// the browser's cache, which the pages still read for drawing and for the bookings that are kept in
-// the browser for now. It runs on every page load and after every admin change, so the server stays
-// the source of truth. It also strips passwords that older browser-only versions stored in the cache.
+// Loads everything this user may see from the server into the cache. It runs on every page load
+// and after every change, so the pages always draw what is in MySQL.
 async function syncFromServer() {
   const [{ timetables }, { faculty }, { sessions, bookings }, queue, { notifications }] =
     await Promise.all([api("/timetables"), api("/faculty"), api("/bookings"), api("/queue"), api("/notifications")]);
@@ -239,23 +215,19 @@ async function syncFromServer() {
   const st = {};
   timetables.forEach(t => { st[t.id] = { name: t.name, edited: t.edited, classes: t.classes }; });
   save(TTS, st);
-  if (typeof TIMETABLE !== "undefined") localStorage.setItem(TTS + "_version", TIMETABLE.version || "1");  // ttStore() must not reload the file over it
-  const users = getUsers().filter(u => u.role === "student").map(({ password, ...u }) => u);
+  const avail = {};
   faculty.forEach(f => {
-    users.push({ id: f.id, name: f.name, email: f.email, role: "faculty" });
     const s = f.settings || { slot_len: 30, capacity: 3, days: [1, 2, 3, 4, 5], off: [], custom: [] };
-    setAvail(f.email, { ttId: f.profile_id || "", slotLen: s.slot_len, capacity: s.capacity, days: s.days,
-      off: Object.fromEntries(s.off.map(key => [key, true])), custom: s.custom });
+    avail[f.email] = { ttId: f.profile_id || "", slotLen: s.slot_len, capacity: s.capacity, days: s.days,
+      off: Object.fromEntries(s.off.map(key => [key, true])), custom: s.custom };
   });
-  localStorage.setItem(USERS_KEY, JSON.stringify(users));
+  save(AVAIL, avail);
+  save(USERS, faculty.map(f => ({ id: f.id, name: f.name, email: f.email, role: "faculty" })));
 }
 const ttFaculty = id => (id && ttStore()[id]) || null;
 
 function getAvail(email) {
   return Object.assign({ ttId: "", slotLen: 30, capacity: 3, days: [1, 2, 3, 4, 5], off: {}, custom: [] }, loadObj(AVAIL)[email] || {});
-}
-function setAvail(email, a) {
-  const all = loadObj(AVAIL); all[email] = a; save(AVAIL, all);
 }
 function classesOf(email) {
   const f = ttFaculty(getAvail(email).ttId);
@@ -681,7 +653,6 @@ function adminFacultyPage(me) {
         onConfirm: async () => {
           let res;                                          // the server cancels the open bookings and tells the students
           try { res = await api(`/admin/faculty/${u.id}/deactivate`, {}); } catch (err) { return err.message; }
-          const av = loadObj(AVAIL); delete av[u.email]; save(AVAIL, av);
           await syncFromServer();
           showMessage(`${u.name} removed. ${res.cancelled.length} booking(s) cancelled.`, true); draw(); return "";
         } });
@@ -1052,7 +1023,7 @@ function navBadge(me) {                               // unread count next to "N
 }
 
 // ================= Protected pages: show the logged-in name, block wrong role =================
-// The server says who is logged in (from the signed cookie), so editing localStorage cannot
+// The server says who is logged in (from the signed cookie), so nothing in the browser can
 // change the user or the role.
 const requiredRole = document.body.dataset.role;
 if (requiredRole) (async () => {
