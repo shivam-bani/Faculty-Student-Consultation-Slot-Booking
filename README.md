@@ -22,10 +22,10 @@ python app.py
 ```
 Then open http://127.0.0.1:5000/. Tests: `python -m unittest discover -s tests -v` (needs MySQL running).
 
-The backend is being connected step by step. Accounts, logins, faculty, timetables,
-consultation settings and bookings (booking, cancelling, rescheduling, faculty decisions) are on
-the server (MySQL). Notifications are still kept in the browser for now (Step 14), so a student
-sees them only on the browser where the faculty member acted.
+All data is on the server (MySQL): accounts, faculty, timetables, consultation settings,
+bookings, the queue and notifications, so every user sees the same data from any browser.
+The pages keep a copy in the browser only to draw quickly; it is reloaded from the server on
+every page load and after every change.
 
 ## Logging in
 - **Admin:** created with `flask --app app create-admin` (there is no built-in admin). Click
@@ -86,7 +86,8 @@ When the slot's time is over: never answered -> Expired, accepted but never call
 - API: `auth.py` (sign up, login, roles), `faculty.py` (faculty accounts and settings),
   `timetable.py` (timetable editing), `slots.py` (free-slot calculation), `bookings.py`
   (booking in one locked transaction, student and faculty actions), `queue_manager.py`
-  (check-in, priority with aging, call next).
+  (check-in, priority with aging, call next), `notifications.py` (each one is saved in the same
+  transaction as the action it describes).
 - `static/timetable-data.js`: imported faculty schedules (contact numbers deliberately excluded).
   The admin's edits are stored separately, so this file is only the starting point.
 - `tools/build_timetable_data.py`: rebuilds it when a new timetable is published.
@@ -96,6 +97,7 @@ When the slot's time is over: never answered -> Expired, accepted but never call
   admin edited by hand are kept.
 
 ## Known limitations (demo)
-- Notifications are still stored per browser (moved to the server in Step 14).
+- New notifications and queue changes appear when a page loads or refreshes itself (every
+  15 seconds on My Appointments and Live Queue); there is no instant push.
 - The student's semester is self-reported in their profile (used for Major project priority).
 - Students' own class clashes are not checked yet (only clashes with their other bookings).
