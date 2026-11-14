@@ -16,6 +16,12 @@ flask --app app create-admin               # asks for the admin's name, email an
 and must never be committed or shared.
 
 ## Run
+Double-click **`start.bat`** (starts the app and opens the browser; close its window to stop).
+For a presentation, double-click **`demo.bat`** instead: it replaces the demo accounts
+(`demo.*@geu.ac.in`) with fresh data around the current time (a slot starting in a few minutes,
+three accepted students, pending requests), uses 1-minute aging for that run only, and opens
+`demo-logins.txt` (git-ignored) with the logins and a suggested order. Your admin account and
+other data are not touched. By hand:
 ```
 .\.venv\Scripts\Activate.ps1
 python app.py

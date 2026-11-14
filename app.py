@@ -12,6 +12,7 @@ import auth
 import bookings
 import commands
 import db  # also loads .env
+import demo
 import faculty
 import notifications
 import queue_manager
@@ -49,6 +50,7 @@ app.config["CHECKIN_EARLY_MINUTES"] = minutes_setting("CHECKIN_EARLY_MINUTES", 1
 
 db.init_app(app)
 commands.init_app(app)
+demo.init_app(app)
 app.register_blueprint(auth.bp)
 app.register_blueprint(bookings.bp)
 app.register_blueprint(faculty.bp)

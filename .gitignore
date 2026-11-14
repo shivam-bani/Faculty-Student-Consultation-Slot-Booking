@@ -3,6 +3,9 @@
 .env.*
 !.env.example
 
+# Demo logins written by demo.bat (contains the demo password)
+demo-logins.txt
+
 # Python virtual environment and caches
 .venv/
 __pycache__/
