@@ -197,15 +197,25 @@ def reset_password(fid):
 @login_required("admin")
 def deactivate(fid):
     """Removes the faculty member from CampusSync but keeps the account row, so their past
-    sessions and bookings still show who they were with. The timetable is freed for a new account."""
+    sessions and bookings still show who they were with. The timetable is freed for a new account.
+    Their open bookings (sessions not yet over) are cancelled in the same transaction; the reply
+    lists them so the page can tell those students."""
     json_body()
     conn = db.get_db()
     cur = conn.cursor()
-    active_faculty_or_404(cur, fid)
+    active_faculty_or_404(cur, fid)  # locks the faculty row, so no booking for them can start meanwhile
+    cur.execute("SELECT b.id FROM bookings b JOIN sessions s ON s.id = b.session_id "
+                "WHERE s.faculty_id = %s AND b.status IN ('Pending', 'Waiting', 'In Session') "
+                "AND TIMESTAMP(s.session_date, s.end_time) > NOW() FOR UPDATE", (fid,))
+    cancelled = [bid for (bid,) in cur.fetchall()]
+    for bid in cancelled:
+        cur.execute("UPDATE bookings SET status = 'Cancelled' WHERE id = %s", (bid,))
+        cur.execute("DELETE FROM reschedule_requests WHERE booking_id = %s", (bid,))
+        cur.execute("INSERT INTO booking_history (booking_id, text) VALUES (%s, 'Cancelled: faculty account removed by admin')", (bid,))
     cur.execute("UPDATE users SET is_active = FALSE WHERE id = %s", (fid,))
     cur.execute("UPDATE faculty_settings SET profile_id = NULL WHERE faculty_id = %s", (fid,))
     conn.commit()
-    return jsonify(ok=True)
+    return jsonify(ok=True, cancelled=[str(bid) for bid in cancelled])
 
 
 def day_and_time(data, *keys):

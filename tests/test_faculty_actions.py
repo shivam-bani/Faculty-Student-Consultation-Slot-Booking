@@ -7,7 +7,7 @@ Run from the project folder (venv active):
 import unittest
 from datetime import date, timedelta
 
-from test_bookings import BookingTestCase, add_faculty, execute, login, query
+from test_bookings import BookingTestCase, add_faculty, add_user, execute, login, query
 
 
 class FacultyActionTestCase(BookingTestCase):
@@ -200,6 +200,22 @@ class RescheduleRequestTests(FacultyActionTestCase):
     def test_nothing_to_approve_or_decline(self):
         self.assertEqual(self.act("approve-reschedule").status_code, 409)
         self.assertEqual(self.act("decline-reschedule").status_code, 409)
+
+
+class RemoveFacultyTests(FacultyActionTestCase):
+    def test_removing_a_faculty_member_cancels_their_open_bookings(self):
+        accepted = self.book(2, ref=self.ref("09:00")).get_json()["booking"]["id"]
+        self.act("accept", bid=accepted)
+        self.clients[0].post(f"/api/bookings/{self.bid}/reschedule", json={"ref": self.ref("10:00")})
+        old = self.book(3, ref=self.ref("11:00")).get_json()["booking"]  # a session that is already over
+        execute("UPDATE sessions SET session_date = %s WHERE id = %s", ((date.today() - timedelta(days=1)).isoformat(), old["sessionId"]))
+        add_user("unittest-admin@geu.ac.in", "admin")
+        r = login("unittest-admin@geu.ac.in").post(f"/api/admin/faculty/{self.fid}/deactivate", json={})
+        self.assertEqual(r.status_code, 200, r.get_json())
+        self.assertEqual(sorted(r.get_json()["cancelled"]), sorted([self.bid, accepted]))
+        self.assertEqual((self.row()[0], self.row(accepted)[0], self.row(old["id"])[0]), ("Cancelled", "Cancelled", "Pending"))
+        self.assertEqual(self.requests(), 0)
+        self.assertEqual(self.history()[-1], "Cancelled: faculty account removed by admin")
 
 
 if __name__ == "__main__":
