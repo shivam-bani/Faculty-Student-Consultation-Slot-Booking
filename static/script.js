@@ -143,11 +143,6 @@ const bookedCount = s => load(BOOKINGS).filter(b => b.sessionId === s.id && hold
 const seatsLeft = s => s.capacity - bookedCount(s);
 const sessionStatus = s => (s.cancelled ? "Cancelled" : seatsLeft(s) > 0 ? "Open" : "Full");
 
-function notify(email, title, message) {
-  const all = load(NOTES);
-  all.push({ email, title, message, time: new Date().toLocaleString("en-GB"), read: false });
-  save(NOTES, all);
-}
 // The place comes from the server's queue (priority, aging, check-in time), not from the token.
 function queuePosition(b) {
   const st = effStatus(b);
@@ -164,12 +159,17 @@ function row(labels, cells) {
 function fill(id, html, cols, emptyText) {
   el(id).innerHTML = html || `<tr><td colspan="${cols}">${emptyText}</td></tr>`;
 }
+// Notifications are made by the server together with the action they describe; syncFromServer()
+// copies this user's own (newest first) into the cache.
 function renderNotes(me) {
-  const mine = load(NOTES).filter(n => n.email === me.email).reverse();
+  const mine = load(NOTES);
   el("noteList").innerHTML = mine.length
     ? mine.map(n => `<article class="note ${n.read ? "read" : "unread"}"><div><strong>${esc(n.title)}</strong><p>${esc(n.message)}</p><small>${n.time}</small></div></article>`).join("")
     : '<p class="muted">No notifications yet.</p>';
-  save(NOTES, load(NOTES).map(n => (n.email === me.email ? { ...n, read: true } : n)));   // opening the page marks them read
+  if (mine.some(n => !n.read)) {                       // opening the page marks them read
+    save(NOTES, mine.map(n => ({ ...n, read: true })));
+    api("/notifications/read", {}).catch(() => { /* they stay unread on the server; shown again next time */ });
+  }
 }
 
 // ================= TIMETABLE + AVAILABILITY =================
@@ -217,7 +217,6 @@ async function createFacultyAccount(name, email, password, ttId) {   // returns 
     return err.message;
   }
   await syncFromServer();
-  notify(email, "Welcome to CampusSync", "Your faculty account was created by the admin. Student requests for your free periods appear under Booking Requests.");
   return "";
 }
 
@@ -226,8 +225,9 @@ async function createFacultyAccount(name, email, password, ttId) {   // returns 
 // the browser for now. It runs on every page load and after every admin change, so the server stays
 // the source of truth. It also strips passwords that older browser-only versions stored in the cache.
 async function syncFromServer() {
-  const [{ timetables }, { faculty }, { sessions, bookings }, queue] =
-    await Promise.all([api("/timetables"), api("/faculty"), api("/bookings"), api("/queue")]);
+  const [{ timetables }, { faculty }, { sessions, bookings }, queue, { notifications }] =
+    await Promise.all([api("/timetables"), api("/faculty"), api("/bookings"), api("/queue"), api("/notifications")]);
+  save(NOTES, notifications.map(n => ({ title: n.title, message: n.message, time: new Date(n.at).toLocaleString("en-GB"), read: n.read })));
   QUEUE.agingMinutes = queue.agingMinutes; QUEUE.checkinEarlyMinutes = queue.checkinEarlyMinutes;
   const places = Object.fromEntries(queue.entries.map(e => [e.id, e]));
   bookings.forEach(b => {                            // place in the queue, worked out by the server
@@ -442,12 +442,10 @@ function appointmentsPage(me) {
           <div class="field"><label for="dlgReason">Reason</label><textarea id="dlgReason" name="reason" placeholder="e.g. Clashes with my lab exam"></textarea></div>`,
         onConfirm: async f => {
           if (!f.slot.value) return "Choose the new time you want.";
-          let label;
           try {
-            ({ reschedule: { label } } = await api(`/bookings/${b.id}/reschedule`, { ref: f.slot.value, reason: f.reason.value.trim() }));
+            await api(`/bookings/${b.id}/reschedule`, { ref: f.slot.value, reason: f.reason.value.trim() });
           } catch (err) { return err.message; }
           await syncFromServer();
-          notify(s.facultyEmail, "Reschedule request", `${b.studentName} (token #${b.token}) asked to move from ${whenText(s)} to ${label}.` + (f.reason.value.trim() ? ` Reason: ${f.reason.value.trim()}` : ""));
           draw(); return "";
         } });
     }
@@ -462,7 +460,6 @@ function appointmentsPage(me) {
         onConfirm: async () => {
           try { await api(`/bookings/${b.id}/cancel`, {}); } catch (err) { return err.message; }
           await syncFromServer();
-          notify(s.facultyEmail, "Booking cancelled", `${b.studentName} cancelled token #${b.token} (${whenText(s)}).`);
           draw(); return "";
         } });
     }
@@ -529,10 +526,7 @@ function bookPage(me) {
     } catch (err) {
       return showMessage(err.message, false);           // e.g. "This session is full."
     }
-    const fac = faculty.find(f => f.email === form.faculty.value), token = booking.token;
-    notify(me.email, "Booking request sent", `Your request to ${fac.name} for ${whenText(slot)} is waiting for approval. Your token is #${token}.`);
-    notify(fac.email, "New booking request", `${me.name} (${student.rollNo}, ${student.course}) requested "${form.topic.value.trim()}" on ${whenText(slot)} (token #${token}).`);
-    if (slot.seats <= 1) notify(fac.email, "Capacity reached", `${whenText(slot)} is now fully booked.`);
+    const token = booking.token;
     showMessage(`Request sent. Your token is #${token}. Redirecting...`, true);
     setTimeout(() => { window.location.href = "appointments.html"; }, 1200);
   });
@@ -585,12 +579,6 @@ function clashingBookings(email) {
   return load(BOOKINGS).filter(b => mine.includes(b.sessionId) && isActive(b)).filter(b => {
     const s = sessionOf(b); return classClash(email, dowOf(s.date), s.start, s.end);
   });
-}
-function timetableChanged(email, what) {
-  const clash = clashingBookings(email);
-  notify(email, "Timetable updated", `The admin ${what}.` + (clash.length
-    ? ` ${clash.length} booked meeting(s) now clash with a class. Reschedule them under Booking Requests.` : ""));
-  return clash.length;
 }
 
 // ================= ADMIN =================
@@ -674,7 +662,6 @@ function adminFacultyPage(me) {
           // The server also clears the "not offered" marks, which belonged to the old timetable.
           try { await api(`/admin/faculty/${u.id}/link`, { profile_id: f.link.value }); } catch (err) { return err.message; }
           await syncFromServer();
-          timetableChanged(u.email, "linked your account to the timetable of " + ttFaculty(f.link.value).name);
           showMessage(`${u.name} now uses the timetable of ${ttFaculty(f.link.value).name}.`, true); draw(); return "";
         } });
     }
@@ -692,10 +679,8 @@ function adminFacultyPage(me) {
       openDialog({ title: `Remove ${u.name}?`, confirm: "Remove faculty", danger: true,
         body: `<p>The account is deactivated and students can no longer book this faculty member. Past meetings keep their name.</p><p>${open.length} open request(s) or meeting(s) will be cancelled and the students notified. The timetable stays, so the account can be created again later.</p>`,
         onConfirm: async () => {
-          let res;                                          // the server cancels the open bookings itself
+          let res;                                          // the server cancels the open bookings and tells the students
           try { res = await api(`/admin/faculty/${u.id}/deactivate`, {}); } catch (err) { return err.message; }
-          open.filter(bk => res.cancelled.includes(bk.id)).forEach(bk => { const s = safeSession(bk);
-            notify(bk.studentEmail, "Booking cancelled", `${s.facultyName} is no longer available on CampusSync, so your meeting on ${whenText(s)} was cancelled. Please book another faculty member.`); });
           const av = loadObj(AVAIL); delete av[u.email]; save(AVAIL, av);
           await syncFromServer();
           showMessage(`${u.name} removed. ${res.cancelled.length} booking(s) cancelled.`, true); draw(); return "";
@@ -756,7 +741,6 @@ function adminTimetablePage(me) {
     const slotLen = Number(sf.slotLen.value);   // a new slot length also clears the "not offered" marks (server)
     const err = await send(`/admin/faculty/${facultyId()}/settings`, { slot_len: slotLen, capacity: Number(sf.defCap.value), days });
     if (err) return showMessage(err, false);
-    notify(email(), "Consultation hours updated", `The admin set your consultation slots to ${slotLen} minutes for up to ${sf.defCap.value} students.`);
     showMessage("Slot settings saved.", true); draw();
   });
 
@@ -775,7 +759,6 @@ function adminTimetablePage(me) {
       if (classClash(email(), day, start, end) && !confirm("This overlaps a class. Add the consultation slot anyway?")) return;
       const err = await send(`/admin/faculty/${facultyId()}/custom-slots`, { day, start, end, capacity: Number(ef.capacity.value) || a.capacity });
       if (err) return showMessage(err, false);
-      notify(email(), "Consultation hours updated", `The admin added consultation hours on ${DAY_LONG[day]}, ${start} - ${end}.`);
       showMessage(`Consultation slot added on ${DAY_LONG[day]}.`, true);
     } else {
       const busy = ef.type.value === "busy";
@@ -783,7 +766,7 @@ function adminTimetablePage(me) {
       const err = await send(`/admin/timetables/${profileId()}/classes`, { day, start, end, code: busy ? "Busy" : ef.code.value.trim().toUpperCase(),
         subject: ef.subject.value.trim() || (busy ? "Not available" : ""), section: ef.section.value.trim(), room: ef.room.value.trim() });
       if (err) return showMessage(err, false);
-      const n = timetableChanged(email(), `added ${busy ? "a busy period" : "a class"} on ${DAY_LONG[day]}, ${start} - ${end}`);
+      const n = clashingBookings(email()).length;      // the server told the faculty member
       showMessage(`Added to ${DAY_LONG[day]}.` + (n ? ` ${n} booked meeting(s) now clash; the faculty member was notified.` : ""), !n);
     }
     ef.start.value = ""; ef.end.value = ""; ef.code.value = ""; ef.subject.value = ""; ef.section.value = ""; ef.room.value = "";
@@ -826,14 +809,13 @@ function adminTimetablePage(me) {
         const err = await send(`/admin/classes/${c.id}`, { day: Number(f.day.value), start: f.start.value, end: f.end.value,
           code: f.code.value.trim(), subject: f.subject.value.trim(), section: f.section.value.trim(), room: f.room.value.trim() });
         if (err) return err;
-        const n = timetableChanged(email(), `changed ${c.code} (${DAY_SHORT[c.day]} ${c.start}) to ${DAY_LONG[Number(f.day.value)]} ${f.start.value} - ${f.end.value}`);
+        const n = clashingBookings(email()).length;    // the server told the faculty member
         showMessage("Timetable entry updated." + (n ? ` ${n} booked meeting(s) now clash; the faculty member was notified.` : ""), !n);
         draw(); return "";
       },
       extra: { text: "Remove entry", onClick: async () => {
         const err = await send(`/admin/classes/${c.id}/delete`, {});
         if (err) return err;
-        timetableChanged(email(), `removed ${c.code} on ${DAY_LONG[c.day]}, ${c.start} - ${c.end}. That time is now open for consultations`);
         showMessage(`${c.code} removed. The freed time is now offered to students.`, true); draw(); return "";
       } } });
   });
@@ -843,7 +825,6 @@ function adminTimetablePage(me) {
     if (!TT.some(f => f.id === id) || !confirm("Replace this faculty member's timetable with the imported university timetable? Your edits to it will be lost.")) return;
     const err = await send(`/admin/timetables/${id}/restore`, {});   // edited flag cleared: future corrections apply
     if (err) return showMessage(err, false);
-    timetableChanged(email(), "restored your timetable to the official university timetable");
     showMessage("Imported timetable restored.", true); draw();
   });
   el("offerAll").addEventListener("click", async () => {
@@ -888,10 +869,6 @@ function requestsPage(me) {
     await syncFromServer();
     return res;
   }
-  function notifyMoved(b, res, note) {
-    const t = load(SESSIONS).find(x => x.id === res.booking.sessionId);
-    notify(b.studentEmail, "Consultation rescheduled", `Your consultation with ${t.facultyName} is now on ${whenText(t)}. New token #${res.booking.token}.` + (note ? ` Note: ${note}` : ""));
-  }
 
   async function moveDialog(b) {
     const s = safeSession(b);
@@ -917,9 +894,7 @@ function requestsPage(me) {
           if (cl && !confirm(`This overlaps your class ${cl.code} (${cl.start} - ${cl.end}). Use this time anyway?`)) return "Pick a time that does not clash with your class.";
           Object.assign(body, { ref: "", date, start, end });  // the server makes a one-student session at that time
         }
-        let res;
-        try { res = await send(b, "move", body); } catch (err) { return err.message; }
-        notifyMoved(b, res, note);
+        try { await send(b, "move", body); } catch (err) { return err.message; }
         showMessage(`${b.studentName} moved and notified.`, true); draw(); return "";
       } });
   }
@@ -930,7 +905,6 @@ function requestsPage(me) {
       onConfirm: async f => {
         const note = f.note.value.trim();
         try { await send(b, kind, { note }); } catch (err) { return err.message; }
-        notify(b.studentEmail, reject ? "Request rejected" : "Booking cancelled", `${s.facultyName} ${reject ? "rejected your request" : "cancelled your booking"} for ${whenText(s)} (token #${b.token}).` + (note ? ` Reason: ${note}` : "") + " You can book another slot.");
         draw(); return "";
       } });
   }
@@ -944,21 +918,17 @@ function requestsPage(me) {
         case "details": return openDialog({ title: "Booking details", body: studentDetailsHTML(b) });
         case "accept":
           await send(b, "accept");
-          notify(b.studentEmail, "Request accepted", `${s.facultyName} accepted your consultation on ${whenText(s)}. Token #${b.token}.`);
           showMessage(`Accepted ${b.studentName}.`, true); return draw();
         case "reject": return reasonDialog(b, "reject");
         case "cancel": return reasonDialog(b, "cancel");
         case "move": return await moveDialog(b);
         case "approve": {
-          let res;
-          try { res = await send(b, "approve-reschedule"); }
+          try { await send(b, "approve-reschedule"); }
           catch (err) { showMessage(err.message + " Use Reschedule to pick a different slot.", false); return; }
-          notifyMoved(b, res, "");
           showMessage(`Moved ${b.studentName} to the requested time.`, true); return draw();
         }
         case "decline":
           await send(b, "decline-reschedule");
-          notify(b.studentEmail, "Reschedule declined", `${s.facultyName} kept your consultation on ${whenText(s)} (token #${b.token}).`);
           return draw();
       }
     } catch (err) { showMessage(err.message, false); await syncFromServer(); draw(); }
@@ -1015,9 +985,7 @@ function queuePage(me) {
     button.disabled = true;                            // one click = one call (the server also checks)
     try {
       const res = await api(`/faculty/sessions/${select.value}/call-next`, { current: button.dataset.current || null });
-      const s = load(SESSIONS).find(x => x.id === select.value);
       if (res.called) {
-        notify(res.called.email, "It's your turn", `${me.name} is ready for you now (${whenText(s)}, token #${res.called.token}).`);
         showMessage(`Called in ${res.called.name} (token #${res.called.token}).`, true);
       } else showMessage(res.completed ? `Finished with ${res.completed.name}. Nobody else is waiting.` : "Nobody is waiting.", true);
     } catch (err) { showMessage(err.message, false); }
@@ -1079,7 +1047,7 @@ function calendarPage(me) {
 
 function navBadge(me) {                               // unread count next to "Notifications"
   const link = document.querySelector('.sidebar a[href$="notifications.html"]');
-  const n = load(NOTES).filter(x => x.email === me.email && !x.read).length;
+  const n = load(NOTES).filter(x => !x.read).length;
   if (link && n) link.insertAdjacentHTML("beforeend", ` <span class="badge" aria-label="${n} unread">${n}</span>`);
 }
 
