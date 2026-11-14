@@ -24,8 +24,8 @@ Then open http://127.0.0.1:5000/. Tests: `python -m unittest discover -s tests -
 
 All data is on the server (MySQL): accounts, faculty, timetables, consultation settings,
 bookings, the queue and notifications, so every user sees the same data from any browser.
-The pages keep a copy in the browser only to draw quickly; it is reloaded from the server on
-every page load and after every change.
+Nothing is saved in the browser: each page loads what the logged-in user may see into memory,
+and loads it again after every change.
 
 ## Logging in
 - **Admin:** created with `flask --app app create-admin` (there is no built-in admin). Click
@@ -35,8 +35,7 @@ every page load and after every change.
   **Login as Faculty**. The admin can reset a forgotten password there.
 - **Students:** sign up on the Sign Up page with an `@geu.ac.in` email, then **Login as Student**.
 - Passwords are stored only as hashes. Who is logged in (and their role) is decided by the server.
-- **Reset all data saved in this browser** on the login page clears the data that is still kept
-  in the browser; it does not delete accounts.
+- Opening the login page logs the current user out.
 
 ## Roles
 **Admin** (Faculty, Timetables, Account)
@@ -95,6 +94,30 @@ When the slot's time is over: never answered -> Expired, accepted but never call
   (current result: 270/270 PDF subject codes placed correctly, 1526/1526 class periods present).
 - When timetable-data.js changes, run `flask --app app import-timetable` again; timetables the
   admin edited by hand are kept.
+
+## Tests
+`python -m unittest discover -s tests -v` (MySQL must be running; the tests create and then
+delete their own `unittest-...` accounts). 189 tests, including:
+- `test_end_to_end.py`: a whole consultation day through the API (admin, sign-up, booking,
+  accepting, check-in, priority queue, notifications, removing the faculty member).
+- `test_concurrency.py`: 10 students book a 3-seat slot at the same moment, 5 times: always
+  exactly 3 succeed with tokens 1, 2, 3; a double click books once; deadlocks are retried.
+- `test_queue.py`: priority, aging (including the exact minute it applies), tie-breaks,
+  check-in window, and two simultaneous "Call next" clicks calling only one student.
+- Database rules: duplicate and invalid rows are refused by PRIMARY KEY, FOREIGN KEY, UNIQUE
+  and CHECK constraints (`schema.sql`), and the app turns those refusals into clear messages.
+
+## Demo walk-through
+1. Admin: **Faculty** -> pick a name -> **Create account** (email + temporary password).
+2. Two students sign up (`@geu.ac.in`) and book the same slot; one chooses **Major project**
+   with semester VII or VIII.
+3. Faculty: **Booking Requests** -> **Accept** both. Students see "Request accepted" under
+   **Notifications**.
+4. On the day of the slot, each student presses **I'm here** on **My Appointments** and sees
+   their queue position. (For a classroom demo, first let the admin add extra consultation
+   hours for today starting a few minutes from now under **Timetables**, and book that slot.)
+5. Faculty: **Live Queue** -> **Call next**: the Major project student is called first; with
+   `AGING_MINUTES=1` a General student who has waited longer catches up.
 
 ## Known limitations (demo)
 - New notifications and queue changes appear when a page loads or refreshes itself (every
