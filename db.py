@@ -36,8 +36,9 @@ def close_db(error=None):
     """Called by Flask at the end of every request."""
     db = g.pop("db", None)
     if db is not None:
-        if error is not None:
-            db.rollback()  # never keep half-finished changes from a failed request
+        # Never keep half-finished changes: a request that failed, or stopped early with an error
+        # reply (abort), did not commit. After a commit this rollback changes nothing.
+        db.rollback()
         db.close()
 
 

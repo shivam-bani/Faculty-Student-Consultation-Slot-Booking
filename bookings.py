@@ -6,6 +6,14 @@
     POST /api/bookings/<id>/cancel                 the student cancels their booking
     POST /api/bookings/<id>/reschedule             the student asks the faculty member for another time
     POST /api/bookings/<id>/reschedule/withdraw    the student withdraws that request
+    POST /api/faculty/bookings/<id>/accept                the faculty member accepts a request
+    POST /api/faculty/bookings/<id>/reject                ... rejects a request (optional reason)
+    POST /api/faculty/bookings/<id>/cancel                ... cancels an accepted booking (optional reason)
+    POST /api/faculty/bookings/<id>/move                  ... moves a booking to another slot or a new time
+    POST /api/faculty/bookings/<id>/approve-reschedule    ... moves it to the time the student asked for
+    POST /api/faculty/bookings/<id>/decline-reschedule    ... keeps the old time
+
+Lock order everywhere: the student's row, the faculty member's row, then session and booking rows.
 """
 import re
 from datetime import datetime
@@ -312,7 +320,18 @@ def slot_label(date, start, end, topic="Consultation hours"):
 
 def own_active_booking(cur, bid):
     """The logged-in student's booking, locked, if it is still Pending or Accepted and not over.
-    Someone else's booking is reported as not found, so its existence is not revealed."""
+    Someone else's booking is reported as not found, so its existence is not revealed.
+    Locks in the usual order (student, faculty, then the booking and session rows), so a cancel
+    cannot deadlock with a booking or a faculty action on the same session."""
+    me = current_user()["id"]
+    cur.execute("SELECT id FROM users WHERE id = %s FOR UPDATE", (me,))
+    cur.fetchone()
+    cur.execute("SELECT s.faculty_id FROM bookings b JOIN sessions s ON s.id = b.session_id WHERE b.id = %s AND b.student_id = %s",
+                (bid, me))
+    row = cur.fetchone()
+    if row is None:
+        abort(error("Booking not found.", 404))
+    lock_faculty(cur, row[0])
     cur.execute("SELECT b.id, b.status, b.session_id, s.faculty_id, DATE_FORMAT(s.session_date, '%Y-%m-%d'), "
                 "TIME_FORMAT(s.end_time, '%H:%i') FROM bookings b JOIN sessions s ON s.id = b.session_id "
                 "WHERE b.id = %s AND b.student_id = %s FOR UPDATE", (bid, current_user()["id"]))
@@ -389,3 +408,175 @@ def withdraw_reschedule(bid):
     log(cur, bid, "Student withdrew the reschedule request")
     conn.commit()
     return jsonify(ok=True)
+
+
+# ----- Faculty actions --------------------------------------------------------------------------
+
+def when_text(date, start, end):
+    """The same text the page shows for a session, e.g. "16 Nov 2026, 09:00 - 09:30"."""
+    d = datetime.strptime(date, "%Y-%m-%d").date()
+    return f"{d.day} {MONTHS[d.month - 1]} {d.year}, {start} - {end}"
+
+
+def faculty_booking(cur, bid, statuses):
+    """A booking in the logged-in faculty member's own sessions, locked, if its status is one of
+    `statuses` and its session has not ended. Another faculty member's booking is "not found".
+    The faculty row is locked first, the same lock a new booking for this faculty member takes."""
+    me = current_user()["id"]
+    lock_faculty(cur, me)
+    cur.execute("SELECT b.id, b.status, b.session_id, b.student_id, DATE_FORMAT(s.session_date, '%Y-%m-%d'), "
+                "TIME_FORMAT(s.end_time, '%H:%i') FROM bookings b JOIN sessions s ON s.id = b.session_id "
+                "WHERE b.id = %s AND s.faculty_id = %s FOR UPDATE", (bid, me))
+    row = cur.fetchone()
+    if row is None:
+        abort(error("Booking not found.", 404))
+    if row[1] not in statuses or has_started(row[4], row[5], datetime.now()):
+        abort(error("This booking can no longer be changed.", 409))
+    return {"id": row[0], "status": row[1], "session_id": row[2], "student_id": row[3], "faculty_id": me}
+
+
+def note_from(data):
+    note = str(data.get("note", "")).strip()
+    if len(note) > 200:
+        abort(error("Keep the message under 200 characters.", 400))
+    return note
+
+
+def set_status(bid, statuses, new_status, text):
+    note = note_from(json_body())
+    conn = db.get_db()
+    cur = conn.cursor()
+    faculty_booking(cur, bid, statuses)
+    cur.execute("UPDATE bookings SET status = %s WHERE id = %s", (new_status, bid))
+    if new_status in ("Rejected", "Cancelled"):  # a closed booking has no open reschedule request
+        cur.execute("DELETE FROM reschedule_requests WHERE booking_id = %s", (bid,))
+    log(cur, bid, text + (f": {note}" if note else ""))
+    conn.commit()
+    return jsonify(ok=True)
+
+
+@bp.post("/faculty/bookings/<int:bid>/accept")
+@login_required("faculty")
+def accept(bid):
+    return set_status(bid, ("Pending",), "Waiting", "Accepted by faculty")  # "Waiting" is shown as "Accepted"
+
+
+@bp.post("/faculty/bookings/<int:bid>/reject")
+@login_required("faculty")
+def reject(bid):
+    return set_status(bid, ("Pending",), "Rejected", "Rejected by faculty")
+
+
+@bp.post("/faculty/bookings/<int:bid>/cancel")
+@login_required("faculty")
+def faculty_cancel(bid):
+    return set_status(bid, ("Waiting",), "Cancelled", "Cancelled by faculty")
+
+
+@bp.post("/faculty/bookings/<int:bid>/decline-reschedule")
+@login_required("faculty")
+def decline_reschedule(bid):
+    json_body()
+    conn = db.get_db()
+    cur = conn.cursor()
+    faculty_booking(cur, bid, ("Pending", "Waiting"))
+    cur.execute("DELETE FROM reschedule_requests WHERE booking_id = %s", (bid,))
+    if cur.rowcount == 0:
+        return error("There is no reschedule request to decline.", 409)
+    log(cur, bid, "Reschedule request declined by faculty")
+    conn.commit()
+    return jsonify(ok=True)
+
+
+def created_session(cur, fid, data, now):
+    """The faculty member typed in a new date and time: a one-student session at that time (or the
+    session that already starts then: same UNIQUE(faculty, date, start) rule as booking a free slot).
+    A clash with the faculty member's own class is allowed; the page asks them before sending."""
+    date, start, end = (str(data.get(k, "")) for k in ("date", "start", "end"))
+    try:
+        datetime.strptime(date, "%Y-%m-%d"), datetime.strptime(start, "%H:%M"), datetime.strptime(end, "%H:%M")
+    except ValueError:
+        abort(error("Fill in the date, start and end time.", 400))
+    if end <= start:
+        abort(error("End time must be after start time.", 400))
+    if has_started(date, start, now):
+        abort(error("Choose a time in the future.", 400))
+    cur.execute("INSERT INTO sessions (faculty_id, session_date, start_time, end_time, capacity, source, topic, description) "
+                "VALUES (%s, %s, %s, %s, 1, 'created', 'Rescheduled consultation', 'Created while rescheduling a booking') "
+                "ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)", (fid, date, start, end))
+    return f"s:{cur.lastrowid}"
+
+
+def move(cur, booking, ref, now):
+    """Move a booking to the slot `ref` of the same faculty member. Like booking: lock the target
+    session, count its seats inside the lock, give the next token there. A pending request that the
+    faculty member moves is accepted at the same time (as on the old page)."""
+    v, s = VIRTUAL_REF.fullmatch(ref), SESSION_REF.fullmatch(ref)
+    if v:
+        owner = int(v.group(1))
+    elif s:
+        cur.execute("SELECT faculty_id FROM sessions WHERE id = %s", (int(s.group(1)),))
+        row = cur.fetchone()
+        owner = row[0] if row else None
+    else:
+        abort(error("Choose where to move the booking.", 400))
+    if owner != booking["faculty_id"]:  # checked before find_session, so no other faculty row gets locked
+        abort(error("That slot is no longer available. Choose another one.", 409))
+    sid, _, date, start, end, capacity = find_session(cur, ref, now)
+    if sid == booking["session_id"]:
+        abort(error("The booking is already in that slot.", 409))
+    cur.execute("SELECT COUNT(*) FROM bookings WHERE session_id = %s AND status NOT IN ('Rejected', 'Cancelled') FOR UPDATE", (sid,))
+    if cur.fetchone()[0] >= capacity:
+        abort(error("That slot is full. Choose another one.", 409))
+    cur.execute(f"SELECT b.token, TIME_FORMAT(s.start_time, '%H:%i'), TIME_FORMAT(s.end_time, '%H:%i') "
+                f"FROM bookings b JOIN sessions s ON s.id = b.session_id "
+                f"WHERE b.student_id = %s AND b.id <> %s AND b.status IN {ACTIVE} AND s.session_date = %s",
+                (booking["student_id"], booking["id"], date))
+    if any(overlaps(r[1], r[2], start, end) for r in cur.fetchall()):
+        abort(error("The student already has another consultation at that time.", 409))
+    cur.execute("SELECT COALESCE(MAX(token), 0) + 1 FROM bookings WHERE session_id = %s FOR UPDATE", (sid,))
+    token = cur.fetchone()[0]
+    # A check-in belongs to the old time, so it is cleared (the queue manager uses it in Step 13).
+    cur.execute("UPDATE bookings SET session_id = %s, token = %s, status = IF(status = 'Pending', 'Waiting', status), "
+                "checked_in_at = NULL WHERE id = %s", (sid, token, booking["id"]))
+    cur.execute("DELETE FROM reschedule_requests WHERE booking_id = %s", (booking["id"],))
+    when = when_text(date, start, end)
+    log(cur, booking["id"], f"Moved to {when} by faculty")
+    return {"id": str(booking["id"]), "sessionId": str(sid), "token": token, "when": when}
+
+
+@bp.post("/faculty/bookings/<int:bid>/move")
+@login_required("faculty")
+def faculty_move(bid):
+    """Body: {"ref": "<slot ref>"}, or {"date", "start", "end"} for a new time; optional "note"."""
+    data = json_body()
+    note_from(data)  # the note goes into the student's notification (still made by the page until Step 14)
+    conn = db.get_db()
+    cur = conn.cursor()
+    now = datetime.now()
+    booking = faculty_booking(cur, bid, ("Pending", "Waiting"))
+    ref = str(data.get("ref") or "") or created_session(cur, booking["faculty_id"], data, now)
+    moved = move(cur, booking, ref, now)
+    conn.commit()
+    return jsonify(ok=True, booking=moved)
+
+
+@bp.post("/faculty/bookings/<int:bid>/approve-reschedule")
+@login_required("faculty")
+def approve_reschedule(bid):
+    json_body()
+    conn = db.get_db()
+    cur = conn.cursor()
+    booking = faculty_booking(cur, bid, ("Pending", "Waiting"))
+    cur.execute("SELECT DATE_FORMAT(req_date, '%Y-%m-%d'), TIME_FORMAT(req_start, '%H:%i') FROM reschedule_requests "
+                "WHERE booking_id = %s", (bid,))
+    row = cur.fetchone()
+    if row is None:
+        return error("There is no reschedule request to approve.", 409)
+    cur.execute("SELECT id FROM sessions WHERE faculty_id = %s AND session_date = %s AND start_time = %s",
+                (booking["faculty_id"], row[0], row[1]))
+    target = cur.fetchone()
+    ref = f"s:{target[0]}" if target else f"v:{booking['faculty_id']}|{row[0]}|{row[1]}"
+    moved = move(cur, booking, ref, datetime.now())
+    conn.commit()
+    return jsonify(ok=True, booking=moved)
