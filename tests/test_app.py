@@ -41,7 +41,7 @@ class StaticFileTests(unittest.TestCase):
 
     def test_every_page_and_asset_is_served(self):
         files = sorted(p.name for p in STATIC.iterdir())
-        self.assertEqual(len([f for f in files if f.endswith(".html")]), 15)
+        self.assertEqual(len([f for f in files if f.endswith(".html")]), 16)  # 15 + queue.html (Step 13)
         for name in ["", *files]:
             with self.subTest(file=name), self.client.get("/" + name) as r:
                 self.assertEqual(r.status_code, 200)

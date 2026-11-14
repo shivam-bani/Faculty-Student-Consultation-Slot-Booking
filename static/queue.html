@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Live Queue - CampusSync</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body data-role="faculty">
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">CampusSync</div>
+    <div class="portal">Faculty Portal</div>
+    <nav aria-label="Main navigation">
+        <a class="nav-item" href="requests.html">Booking Requests</a>
+        <a class="nav-item active" href="queue.html" aria-current="page">Live Queue</a>
+        <a class="nav-item" href="timetable.html">My Timetable</a>
+        <a class="nav-item" href="faculty-calendar.html">Calendar</a>
+        <a class="nav-item" href="faculty-notifications.html">Notifications</a>
+    </nav>
+    <a class="nav-item" href="index.html">Logout</a>
+  </aside>
+  <main>
+    <header class="topbar">
+      <div><h1>Live Queue</h1><p class="muted">Students who pressed "I'm here", in the order they will be called in.</p></div>
+      <div class="user"><span><span data-user-name>Faculty Name</span></span><small>Faculty</small></div>
+    </header>
+    <p id="formMsg" class="form-msg" role="alert"></p>
+    <section class="card">
+      <div class="form-grid">
+        <div class="field wide">
+          <label for="queueSession">Session</label>
+          <select id="queueSession"></select>
+        </div>
+      </div>
+      <p id="queueInfo" class="muted"></p>
+      <p id="nowServing"></p>
+      <div class="form-actions">
+        <button type="button" class="btn primary" id="callNext">Call next</button>
+      </div>
+      <p class="muted">Final-year Major project consultations start with a higher priority. Every few minutes of waiting
+        raises a student's priority by one, so nobody waits forever. Equal priority: whoever checked in first.</p>
+    </section>
+    <section class="card">
+      <h2>Waiting queue</h2>
+      <div class="table-wrap">
+        <table class="responsive">
+          <caption class="sr-only">Students waiting, in calling order</caption>
+          <thead><tr><th scope="col">Position</th><th scope="col">Student</th><th scope="col">Token</th><th scope="col">Consultation</th><th scope="col">Checked in</th><th scope="col">Waiting</th><th scope="col">Priority</th></tr></thead>
+          <tbody id="queueRows"></tbody>
+        </table>
+      </div>
+    </section>
+    <section class="card">
+      <h2>Everyone else in this session</h2>
+      <div class="table-wrap">
+        <table class="responsive">
+          <caption class="sr-only">Students not waiting in the queue</caption>
+          <thead><tr><th scope="col">Student</th><th scope="col">Token</th><th scope="col">Consultation</th><th scope="col">Status</th></tr></thead>
+          <tbody id="otherRows"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+</div>
+<script src="timetable-data.js"></script>
+<script src="script.js"></script>
+</body>
+</html>

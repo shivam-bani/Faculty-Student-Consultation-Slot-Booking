@@ -13,6 +13,7 @@ import bookings
 import commands
 import db  # also loads .env
 import faculty
+import queue_manager
 import timetable
 
 # static_url_path="" serves static/index.html at /index.html (not /static/index.html),
@@ -28,11 +29,29 @@ app.config.update(
     SESSION_COOKIE_SAMESITE="Lax",        # other sites cannot send it with their requests
 )
 
+
+def minutes_setting(name, default, lowest, highest):
+    """A whole number of minutes from .env, checked once at start-up."""
+    try:
+        value = int(os.getenv(name, default))
+    except ValueError:
+        value = None
+    if value is None or not lowest <= value <= highest:
+        raise RuntimeError(f"{name} in .env must be a whole number of minutes from {lowest} to {highest}.")
+    return value
+
+
+# Queue manager (queue_manager.py): one priority level is added per AGING_MINUTES of waiting, and
+# students can press "I'm here" from CHECKIN_EARLY_MINUTES before their slot starts.
+app.config["AGING_MINUTES"] = minutes_setting("AGING_MINUTES", 10, 1, 120)
+app.config["CHECKIN_EARLY_MINUTES"] = minutes_setting("CHECKIN_EARLY_MINUTES", 10, 0, 120)
+
 db.init_app(app)
 commands.init_app(app)
 app.register_blueprint(auth.bp)
 app.register_blueprint(bookings.bp)
 app.register_blueprint(faculty.bp)
+app.register_blueprint(queue_manager.bp)
 app.register_blueprint(timetable.bp)
 
 

@@ -112,21 +112,29 @@ const DAY_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const DAY_LONG = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 // ---- booking status ----
-// Pending (sent by student) -> Waiting (accepted, in the queue) -> In Session -> Completed
-// or Rejected / Cancelled. "Waiting" is shown to students and in requests as "Accepted".
-// Once a meeting's end time has passed it closes by itself: accepted -> Completed, never answered -> Expired.
+// Pending (sent by student) -> Waiting (accepted; joins the queue with "I'm here") -> In Session
+// (called in by the faculty member) -> Completed, or Rejected / Cancelled.
+// "Waiting" is shown to students and in requests as "Accepted".
+// Once a meeting's end time has passed it closes by itself: never answered -> Expired,
+// accepted but never called in -> Missed, still in session -> Completed.
 function effStatus(b) {
   if (b.status === "Pending" || b.status === "Waiting" || b.status === "In Session") {
     const s = load(SESSIONS).find(x => x.id === b.sessionId);
-    if (s && isPast(s.date, s.end)) return b.status === "Pending" ? "Expired" : "Completed";
+    if (s && isPast(s.date, s.end)) return { Pending: "Expired", Waiting: "Missed", "In Session": "Completed" }[b.status];
   }
   return b.status;
 }
+// Queue settings from the server (.env): check-in opens this many minutes before a slot; one
+// priority level is added per agingMinutes of waiting. Filled in by syncFromServer().
+const QUEUE = { agingMinutes: 10, checkinEarlyMinutes: 10 };
+const checkInOpensAt = s => toHM(Math.max(0, toMin(s.start) - QUEUE.checkinEarlyMinutes));
+const canCheckIn = b => { const s = sessionOf(b);
+  return effStatus(b) === "Waiting" && !b.checkedInAt && s && s.date === today() && nowHM() >= checkInOpensAt(s); };
 const isActive = b => ["Pending", "Waiting", "In Session"].includes(effStatus(b));
 const holdsSeat = b => b.status !== "Cancelled" && b.status !== "Rejected";
 const shownStatus = b => (effStatus(b) === "Waiting" ? "Accepted" : effStatus(b));
 const statusLabel = b => (b.reschedule && isActive(b) ? "Reschedule requested" : shownStatus(b));
-const statusPills = b => `<div class="pills">${pill(shownStatus(b))}${b.reschedule && isActive(b) ? pill("Reschedule requested") : ""}</div>`;
+const statusPills = b => `<div class="pills">${pill(shownStatus(b))}${effStatus(b) === "Waiting" && b.checkedInAt ? pill("Checked in") : ""}${b.reschedule && isActive(b) ? pill("Reschedule requested") : ""}</div>`;
 // Timetable slots become sessions only when booked; hide those whose bookings all moved away.
 const hasBookings = s => s.source !== "timetable" || load(BOOKINGS).some(b => b.sessionId === s.id);
 const sessionOf = b => load(SESSIONS).find(s => s.id === b.sessionId);
@@ -140,12 +148,15 @@ function notify(email, title, message) {
   all.push({ email, title, message, time: new Date().toLocaleString("en-GB"), read: false });
   save(NOTES, all);
 }
+// The place comes from the server's queue (priority, aging, check-in time), not from the token.
 function queuePosition(b) {
-  if (b.status === "In Session") return "Now";
-  if (b.status === "Pending" && isActive(b)) return "Awaiting approval";
-  if (b.status !== "Waiting" || !isActive(b)) return "-";
-  const ahead = load(BOOKINGS).filter(x => x.sessionId === b.sessionId && x.status === "Waiting" && x.token <= b.token);
-  return String(ahead.length);
+  const st = effStatus(b);
+  if (st === "In Session") return "Now";
+  if (st === "Pending") return "Awaiting approval";
+  if (st !== "Waiting") return "-";
+  if (b.queuePosition) return String(b.queuePosition);
+  const s = sessionOf(b);
+  return s && s.date === today() && nowHM() >= checkInOpensAt(s) ? "Press \"I'm here\"" : `Check in from ${s ? checkInOpensAt(s) : "-"}`;
 }
 function row(labels, cells) {
   return "<tr>" + cells.map((c, i) => `<td data-label="${labels[i]}">${c}</td>`).join("") + "</tr>";
@@ -215,7 +226,14 @@ async function createFacultyAccount(name, email, password, ttId) {   // returns 
 // the browser for now. It runs on every page load and after every admin change, so the server stays
 // the source of truth. It also strips passwords that older browser-only versions stored in the cache.
 async function syncFromServer() {
-  const [{ timetables }, { faculty }, { sessions, bookings }] = await Promise.all([api("/timetables"), api("/faculty"), api("/bookings")]);
+  const [{ timetables }, { faculty }, { sessions, bookings }, queue] =
+    await Promise.all([api("/timetables"), api("/faculty"), api("/bookings"), api("/queue")]);
+  QUEUE.agingMinutes = queue.agingMinutes; QUEUE.checkinEarlyMinutes = queue.checkinEarlyMinutes;
+  const places = Object.fromEntries(queue.entries.map(e => [e.id, e]));
+  bookings.forEach(b => {                            // place in the queue, worked out by the server
+    b.queuePosition = places[b.id] ? places[b.id].position : null;
+    b.effectivePriority = places[b.id] ? places[b.id].effectivePriority : null;
+  });
   save(SESSIONS, sessions);                          // only what this user may see (the server decides)
   save(BOOKINGS, bookings);
   const st = {};
@@ -386,6 +404,7 @@ function appointmentsPage(me) {
       let acts = "";
       if (withActions) {
         const btns = [];
+        if (canCheckIn(b)) btns.push(`<button type="button" class="btn small primary" data-act="checkin" data-id="${b.id}">I'm here</button>`);
         if (b.status === "Pending" || b.status === "Waiting") {
           btns.push(b.reschedule ? `<button type="button" class="btn small" data-act="withdraw" data-id="${b.id}">Withdraw change</button>`
                                  : `<button type="button" class="btn small" data-act="resched" data-id="${b.id}">Request reschedule</button>`);
@@ -406,6 +425,15 @@ function appointmentsPage(me) {
     const btn = e.target.closest("button[data-act]");
     if (!btn) return;
     const b = load(BOOKINGS).find(x => x.id === btn.dataset.id), s = safeSession(b);
+    if (btn.dataset.act === "checkin") {             // joins the queue; waiting time counts from now
+      btn.disabled = true;
+      try {
+        const { position } = await api(`/bookings/${b.id}/check-in`, {});
+        showMessage(`You are checked in. Your place in the queue: ${position}.`, true);
+      } catch (err) { showMessage(err.message, false); }
+      await syncFromServer();
+      draw();
+    }
     if (btn.dataset.act === "resched") {
       const opts = slotOptions(await serverSlots(s.facultyEmail).catch(() => []), b.sessionId);
       openDialog({ title: "Request a new time", confirm: "Send request",
@@ -440,6 +468,15 @@ function appointmentsPage(me) {
     }
   });
   draw();
+  autoRefresh(draw);                                   // the queue place changes as others are called in
+}
+
+// Reload from the server every 15 seconds while the page is visible and no dialog is open.
+function autoRefresh(draw, seconds = 15) {
+  setInterval(async () => {
+    if (document.hidden || document.querySelector("dialog[open]")) return;
+    try { await syncFromServer(); draw(); } catch { /* try again next time */ }
+  }, seconds * 1000);
 }
 
 function bookPage(me) {
@@ -929,6 +966,68 @@ function requestsPage(me) {
   draw();
 }
 
+// ---- live queue (faculty): the order comes from the server's scheduler (queue_manager.py) ----
+function queuePage(me) {
+  const select = el("queueSession"), button = el("callNext");
+  const inSlot = s => load(BOOKINGS).filter(b => b.sessionId === s.id && holdsSeat(b) && b.status !== "Pending");
+  const queueOpen = s => s.date === today() && nowHM() >= checkInOpensAt(s) && !isPast(s.date, s.end);
+
+  function draw() {
+    // Sessions from today on that have accepted students; keep the choice across refreshes.
+    const list = load(SESSIONS).filter(s => s.facultyEmail === me.email && !s.cancelled && s.date >= today() && inSlot(s).length)
+      .sort((x, y) => (x.date + x.start).localeCompare(y.date + y.start));
+    const chosen = list.find(s => s.id === select.value) || list.find(s => !isPast(s.date, s.end)) || list[0];
+    select.innerHTML = list.length
+      ? list.map(s => `<option value="${s.id}">${DAY_SHORT[dowOf(s.date)]} ${fmtDate(s.date)}, ${s.start} - ${s.end}${s.topic !== "Consultation hours" ? " · " + esc(s.topic) : ""}</option>`).join("")
+      : '<option value="">No accepted bookings yet</option>';
+    if (chosen) select.value = chosen.id;
+    const bookings = chosen ? inSlot(chosen) : [];
+    const now = bookings.find(b => b.status === "In Session" && effStatus(b) === "In Session");
+    const waiting = bookings.filter(b => b.queuePosition && effStatus(b) === "Waiting").sort((x, y) => x.queuePosition - y.queuePosition);
+    const open = chosen && queueOpen(chosen);
+
+    el("queueInfo").textContent = !chosen ? "" : open
+      ? `Queue open until ${chosen.end}. Priority rises by 1 for every ${QUEUE.agingMinutes} minute(s) of waiting.`
+      : isPast(chosen.date, chosen.end) ? "This session has ended."
+      : `The queue opens at ${checkInOpensAt(chosen)} on ${fmtDate(chosen.date)}, when students can start pressing "I'm here".`;
+    el("nowServing").innerHTML = now ? `<strong>In session now:</strong> ${esc(now.studentName)} (token #${now.token})` : "";
+    button.dataset.current = now ? now.id : "";
+    button.textContent = waiting.length ? "Call next" : now ? "Finish current student" : "Call next";
+    button.disabled = !open || (!waiting.length && !now);
+
+    const who = b => `<div class="cell"><strong>${esc(b.studentName)}</strong><span class="sub">${b.student && b.student.studentId ? "ID " + esc(b.student.studentId) : esc(b.studentEmail)}</span></div>`;
+    const kind = b => `<div class="cell">${esc(b.consultationType || "General")}<span class="sub">Semester ${esc((b.student && b.student.semester) || "-")}</span></div>`;
+    const clock = ms => new Date(ms).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+    const L = ["Position", "Student", "Token", "Consultation", "Checked in", "Waiting", "Priority"];
+    fill("queueRows", waiting.map(b => row(L, [String(b.queuePosition), who(b), "#" + b.token, kind(b), clock(b.checkedInAt),
+      `${Math.floor((Date.now() - b.checkedInAt) / 60000)} min`,
+      `<div class="cell">${pill(b.basePriority === 2 ? "High" : "Normal")}<span class="sub">Now ${b.effectivePriority} (base ${b.basePriority} + ${b.effectivePriority - b.basePriority} for waiting)</span></div>`])).join(""),
+      7, "Nobody is waiting. Students appear here after pressing \"I'm here\".");
+    const others = bookings.filter(b => !waiting.includes(b)).sort((x, y) => x.token - y.token);
+    const L2 = ["Student", "Token", "Consultation", "Status"];
+    fill("otherRows", others.map(b => row(L2, [who(b), "#" + b.token, kind(b),
+      effStatus(b) === "Waiting" ? pill("Accepted") + '<span class="sub">Not checked in yet</span>' : pill(shownStatus(b))])).join(""),
+      4, "No other students in this session.");
+  }
+
+  select.addEventListener("change", draw);
+  button.addEventListener("click", async () => {
+    button.disabled = true;                            // one click = one call (the server also checks)
+    try {
+      const res = await api(`/faculty/sessions/${select.value}/call-next`, { current: button.dataset.current || null });
+      const s = load(SESSIONS).find(x => x.id === select.value);
+      if (res.called) {
+        notify(res.called.email, "It's your turn", `${me.name} is ready for you now (${whenText(s)}, token #${res.called.token}).`);
+        showMessage(`Called in ${res.called.name} (token #${res.called.token}).`, true);
+      } else showMessage(res.completed ? `Finished with ${res.completed.name}. Nobody else is waiting.` : "Nobody is waiting.", true);
+    } catch (err) { showMessage(err.message, false); }
+    await syncFromServer();
+    draw();
+  });
+  draw();
+  autoRefresh(draw);                                   // new check-ins and aging show up without reloading
+}
+
 // ---- calendar (students: their meetings; faculty: sessions with bookings) ----
 function calendarEvents(me) {
   const shortName = n => String(n).replace(/^(Dr|Mr|Ms|Mrs|Prof)\.?\s*/i, "");
@@ -941,7 +1040,7 @@ function calendarEvents(me) {
     const bk = bookings.filter(b => b.sessionId === s.id && holdsSeat(b) && effStatus(b) !== "Expired");
     if (!bk.length && s.source === "timetable") return null;
     const pend = bk.filter(b => effStatus(b) === "Pending").length;
-    const label = pend ? "Pending" : bk.length && bk.every(b => effStatus(b) === "Completed") ? "Completed" : bk.length ? "Accepted" : "Open";
+    const label = pend ? "Pending" : bk.length && bk.every(b => ["Completed", "Missed"].includes(effStatus(b))) ? "Completed" : bk.length ? "Accepted" : "Open";
     return { date: s.date, start: s.start, end: s.end, title: s.topic, short: bk.length ? `${bk.length} student${bk.length > 1 ? "s" : ""}` : s.topic,
              sub: bk.length ? bk.map(b => b.studentName).join(", ") + (pend ? ` (${pend} awaiting approval)` : "") : "No bookings yet", label };
   }).filter(Boolean);
@@ -1002,6 +1101,7 @@ if (requiredRole) (async () => {
     if (el("slotRows")) slotsPage(me);
     if (el("ttView")) facultyTimetablePage(me);
     if (el("openReqs")) requestsPage(me);
+    if (el("queueRows")) queuePage(me);
     if (el("pwForm")) adminAccountPage(me);
     if (el("addFacultyForm")) adminFacultyPage(me);
     if (el("entryForm")) adminTimetablePage(me);
