@@ -22,7 +22,8 @@ from werkzeug.security import generate_password_hash
 
 import db
 from auth import MAX_PASSWORD, MIN_PASSWORD, error, json_body, login_required
-from slots import upcoming_slots, weekly_slots
+from notifications import notify, timetable_changed
+from slots import DAY_NAMES, upcoming_slots, weekly_slots, when_text
 
 bp = Blueprint("faculty", __name__, url_prefix="/api")
 
@@ -130,6 +131,8 @@ def create_faculty():
                     "ON DUPLICATE KEY UPDATE profile_id = VALUES(profile_id)", (fid, profile_id))
         cur.executemany("INSERT IGNORE INTO consult_days (faculty_id, day_of_week) VALUES (%s, %s)",
                         [(fid, d) for d in DEFAULT_DAYS])
+        notify(cur, fid, "Welcome to CampusSync", "Your faculty account was created by the admin. "
+                                                  "Student requests for your free periods appear under Booking Requests.")
     except mysql.connector.IntegrityError as e:
         conn.rollback()
         if e.errno == 1062:  # another request linked the timetable or used the email at the same moment
@@ -174,6 +177,8 @@ def link_timetable(fid):
         if e.errno == 1062:
             return error("That timetable was just linked to someone else. Refresh and try again.", 409)
         raise
+    cur.execute("SELECT name FROM timetable_profiles WHERE id = %s", (profile_id,))
+    timetable_changed(cur, fid, "linked your account to the timetable of " + cur.fetchone()[0])
     conn.commit()
     cur.execute(FACULTY_QUERY + " AND u.id = %s", (fid,))
     return jsonify(ok=True, faculty=faculty_json(cur.fetchone()))
@@ -203,11 +208,16 @@ def deactivate(fid):
     json_body()
     conn = db.get_db()
     cur = conn.cursor()
-    active_faculty_or_404(cur, fid)  # locks the faculty row, so no booking for them can start meanwhile
-    cur.execute("SELECT b.id FROM bookings b JOIN sessions s ON s.id = b.session_id "
+    name = active_faculty_or_404(cur, fid)[1]  # locks the faculty row, so no booking for them can start meanwhile
+    cur.execute("SELECT b.id, b.student_id, DATE_FORMAT(s.session_date, '%Y-%m-%d'), TIME_FORMAT(s.start_time, '%H:%i'), "
+                "TIME_FORMAT(s.end_time, '%H:%i') FROM bookings b JOIN sessions s ON s.id = b.session_id "
                 "WHERE s.faculty_id = %s AND b.status IN ('Pending', 'Waiting', 'In Session') "
                 "AND TIMESTAMP(s.session_date, s.end_time) > NOW() FOR UPDATE", (fid,))
-    cancelled = [bid for (bid,) in cur.fetchall()]
+    rows = cur.fetchall()
+    cancelled = [r[0] for r in rows]
+    for _, student_id, date, start, end in rows:
+        notify(cur, student_id, "Booking cancelled", f"{name} is no longer available on CampusSync, so your meeting on "
+                                                     f"{when_text(date, start, end)} was cancelled. Please book another faculty member.")
     for bid in cancelled:
         cur.execute("UPDATE bookings SET status = 'Cancelled' WHERE id = %s", (bid,))
         cur.execute("DELETE FROM reschedule_requests WHERE booking_id = %s", (bid,))
@@ -257,6 +267,8 @@ def save_settings(fid):
     cur.execute("UPDATE faculty_settings SET slot_len = %s, capacity = %s WHERE faculty_id = %s", (slot_len, capacity, fid))
     cur.execute("DELETE FROM consult_days WHERE faculty_id = %s", (fid,))
     cur.executemany("INSERT INTO consult_days (faculty_id, day_of_week) VALUES (%s, %s)", [(fid, d) for d in days])
+    notify(cur, fid, "Consultation hours updated",
+           f"The admin set your consultation slots to {slot_len} minutes for up to {capacity} students.")
     conn.commit()
     return jsonify(ok=True)
 
@@ -307,8 +319,10 @@ def add_custom_slot(fid):
     active_faculty_or_404(cur, fid)
     cur.execute("INSERT INTO custom_slots (faculty_id, day_of_week, start_time, end_time, capacity) VALUES (%s, %s, %s, %s, %s)",
                 (fid, day, start, end, capacity))
+    slot_id = cur.lastrowid
+    notify(cur, fid, "Consultation hours updated", f"The admin added consultation hours on {DAY_NAMES[day - 1]}, {start} - {end}.")
     conn.commit()
-    return make_response(jsonify(ok=True, id=str(cur.lastrowid)), 201)
+    return make_response(jsonify(ok=True, id=str(slot_id)), 201)
 
 
 @bp.post("/admin/custom-slots/<int:cid>/delete")

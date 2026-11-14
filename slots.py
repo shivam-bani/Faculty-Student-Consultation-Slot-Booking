@@ -1,11 +1,21 @@
 """Consultation slots: the free time between a faculty member's classes, and what can be booked.
 
-weekly_slots() and upcoming_slots() are the server's copies of weeklySlots() and upcomingSlots() in
-static/script.js, line for line, so the server can check that a slot a student books really exists.
-Both versions must give the same answer: tests/test_slots.py checks the rules, and the two were also
-compared on real timetables.
+weekly_slots() is the server's copy of weeklySlots() in static/script.js (which draws the week
+grid), line for line; upcoming_slots() was ported from the page's former upcomingSlots(), which the
+pages no longer have because they now ask the server. tests/test_slots.py checks the rules, and both
+were compared with the JavaScript versions on real timetables.
+Also the date texts used in messages, the same as the pages show them.
 """
-from datetime import timedelta
+from datetime import datetime, timedelta
+
+DAY_NAMES = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def when_text(date, start, end):
+    """The same text the page shows for a session, e.g. "16 Nov 2026, 09:00 - 09:30"."""
+    d = datetime.strptime(date, "%Y-%m-%d").date()
+    return f"{d.day} {MONTHS[d.month - 1]} {d.year}, {start} - {end}"
 
 DAY_START, DAY_END = "08:00", "17:55"  # college working hours used to find free time
 

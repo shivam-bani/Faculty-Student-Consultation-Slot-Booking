@@ -24,7 +24,8 @@ from flask import Blueprint, abort, current_app, jsonify, make_response
 import db
 from auth import current_user, error, json_body, login_required
 from faculty import sessions_of, week_data
-from slots import overlaps, upcoming_slots
+from notifications import notify
+from slots import DAY_NAMES, MONTHS, overlaps, upcoming_slots, when_text
 
 bp = Blueprint("bookings", __name__, url_prefix="/api")
 
@@ -272,7 +273,8 @@ def book_once(conn, student, profile, ref, topic, desc, ctype, now):
         # including those just made by the students who held the lock before us.
         cur.execute("SELECT COUNT(*) FROM bookings WHERE session_id = %s AND status NOT IN ('Rejected', 'Cancelled') "
                     "FOR UPDATE", (sid,))
-        if cur.fetchone()[0] >= capacity:
+        taken = cur.fetchone()[0]
+        if taken >= capacity:
             conn.rollback()
             return error("This session is full.", 409)
         cur.execute(f"SELECT COUNT(*) FROM bookings WHERE session_id = %s AND student_id = %s AND status IN {ACTIVE} FOR UPDATE",
@@ -295,6 +297,13 @@ def book_once(conn, student, profile, ref, topic, desc, ctype, now):
                     "VALUES (%s, %s, %s, %s, %s, %s, %s)", (sid, student["id"], token, topic, desc, ctype, priority))
         bid = cur.lastrowid
         cur.execute("INSERT INTO booking_history (booking_id, text) VALUES (%s, 'Requested by student')", (bid,))
+        info = booking_info(cur, bid)
+        notify(cur, student["id"], "Booking request sent",
+               f"Your request to {info['faculty']} for {info['when']} is waiting for approval. Your token is #{token}.")
+        notify(cur, fid, "New booking request", f"{info['student']} ({profile['roll_no']}, {profile['course']}) "
+                                                f"requested \"{topic}\" on {info['when']} (token #{token}).")
+        if taken + 1 >= capacity:
+            notify(cur, fid, "Capacity reached", f"{info['when']} is now fully booked.")
         conn.commit()
     except mysql.connector.IntegrityError as e:
         conn.rollback()
@@ -305,10 +314,6 @@ def book_once(conn, student, profile, ref, topic, desc, ctype, now):
         raise
     return make_response(jsonify(ok=True, booking={"id": str(bid), "sessionId": str(sid), "token": token,
                                                    "basePriority": priority, "status": "Pending"}), 201)
-
-
-DAY_NAMES = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
-MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 
 
 def slot_label(date, start, end, topic="Consultation hours"):
@@ -347,6 +352,22 @@ def log(cur, bid, text):
     cur.execute("INSERT INTO booking_history (booking_id, text) VALUES (%s, %s)", (bid, text[:255]))
 
 
+def booking_info(cur, bid):
+    """Who and when of a booking, for the notification texts.
+
+    A locking read on purpose: a plain SELECT reads this transaction's older snapshot, which may not
+    contain a session that another student's booking created a moment ago (found by the 10-student
+    race test). Every caller already holds the locks on this booking and session row, so FOR SHARE
+    OF b, s waits for nothing new; the users rows are not locked."""
+    cur.execute("SELECT b.token, b.student_id, st.name, s.faculty_id, f.name, DATE_FORMAT(s.session_date, '%Y-%m-%d'), "
+                "TIME_FORMAT(s.start_time, '%H:%i'), TIME_FORMAT(s.end_time, '%H:%i') FROM bookings b "
+                "JOIN sessions s ON s.id = b.session_id JOIN users st ON st.id = b.student_id JOIN users f ON f.id = s.faculty_id "
+                "WHERE b.id = %s FOR SHARE OF b, s", (bid,))
+    token, student_id, student, faculty_id, faculty, date, start, end = cur.fetchone()
+    return {"token": token, "student_id": student_id, "student": student, "faculty_id": faculty_id, "faculty": faculty,
+            "when": when_text(date, start, end)}
+
+
 @bp.post("/bookings/<int:bid>/cancel")
 @login_required("student")
 def cancel(bid):
@@ -357,6 +378,8 @@ def cancel(bid):
     cur.execute("UPDATE bookings SET status = 'Cancelled' WHERE id = %s", (bid,))  # frees the seat; the token is not reused
     cur.execute("DELETE FROM reschedule_requests WHERE booking_id = %s", (bid,))
     log(cur, bid, "Cancelled by student")
+    info = booking_info(cur, bid)
+    notify(cur, info["faculty_id"], "Booking cancelled", f"{info['student']} cancelled token #{info['token']} ({info['when']}).")
     conn.commit()
     return jsonify(ok=True)
 
@@ -390,6 +413,9 @@ def request_reschedule(bid):
                 "reason = VALUES(reason), requested_at = CURRENT_TIMESTAMP", (bid, slot["date"], slot["start"], slot["end"], reason))
     label = slot_label(slot["date"], slot["start"], slot["end"], slot["topic"])
     log(cur, bid, "Student asked to move to " + label)
+    info = booking_info(cur, bid)
+    notify(cur, info["faculty_id"], "Reschedule request", f"{info['student']} (token #{info['token']}) asked to move from "
+                                                          f"{info['when']} to {label}." + (f" Reason: {reason}" if reason else ""))
     conn.commit()
     return jsonify(ok=True, reschedule={"ref": ref, "label": label, "reason": reason})
 
@@ -411,12 +437,6 @@ def withdraw_reschedule(bid):
 
 
 # ----- Faculty actions --------------------------------------------------------------------------
-
-def when_text(date, start, end):
-    """The same text the page shows for a session, e.g. "16 Nov 2026, 09:00 - 09:30"."""
-    d = datetime.strptime(date, "%Y-%m-%d").date()
-    return f"{d.day} {MONTHS[d.month - 1]} {d.year}, {start} - {end}"
-
 
 def faculty_booking(cur, bid, statuses):
     """A booking in the logged-in faculty member's own sessions, locked, if its status is one of
@@ -451,6 +471,16 @@ def set_status(bid, statuses, new_status, text):
     if new_status in ("Rejected", "Cancelled"):  # a closed booking has no open reschedule request
         cur.execute("DELETE FROM reschedule_requests WHERE booking_id = %s", (bid,))
     log(cur, bid, text + (f": {note}" if note else ""))
+    info = booking_info(cur, bid)
+    reason = f" Reason: {note}" if note else ""
+    title, message = {
+        "Waiting": ("Request accepted", f"{info['faculty']} accepted your consultation on {info['when']}. Token #{info['token']}."),
+        "Rejected": ("Request rejected", f"{info['faculty']} rejected your request for {info['when']} (token #{info['token']})."
+                                         f"{reason} You can book another slot."),
+        "Cancelled": ("Booking cancelled", f"{info['faculty']} cancelled your booking for {info['when']} (token #{info['token']})."
+                                           f"{reason} You can book another slot."),
+    }[new_status]
+    notify(cur, info["student_id"], title, message)
     conn.commit()
     return jsonify(ok=True)
 
@@ -484,6 +514,9 @@ def decline_reschedule(bid):
     if cur.rowcount == 0:
         return error("There is no reschedule request to decline.", 409)
     log(cur, bid, "Reschedule request declined by faculty")
+    info = booking_info(cur, bid)
+    notify(cur, info["student_id"], "Reschedule declined",
+           f"{info['faculty']} kept your consultation on {info['when']} (token #{info['token']}).")
     conn.commit()
     return jsonify(ok=True)
 
@@ -507,7 +540,7 @@ def created_session(cur, fid, data, now):
     return f"s:{cur.lastrowid}"
 
 
-def move(cur, booking, ref, now):
+def move(cur, booking, ref, now, note=""):
     """Move a booking to the slot `ref` of the same faculty member. Like booking: lock the target
     session, count its seats inside the lock, give the next token there. A pending request that the
     faculty member moves is accepted at the same time (as on the old page)."""
@@ -542,6 +575,9 @@ def move(cur, booking, ref, now):
     cur.execute("DELETE FROM reschedule_requests WHERE booking_id = %s", (booking["id"],))
     when = when_text(date, start, end)
     log(cur, booking["id"], f"Moved to {when} by faculty")
+    info = booking_info(cur, booking["id"])
+    notify(cur, info["student_id"], "Consultation rescheduled", f"Your consultation with {info['faculty']} is now on {when}. "
+                                                                f"New token #{token}." + (f" Note: {note}" if note else ""))
     return {"id": str(booking["id"]), "sessionId": str(sid), "token": token, "when": when}
 
 
@@ -550,13 +586,13 @@ def move(cur, booking, ref, now):
 def faculty_move(bid):
     """Body: {"ref": "<slot ref>"}, or {"date", "start", "end"} for a new time; optional "note"."""
     data = json_body()
-    note_from(data)  # the note goes into the student's notification (still made by the page until Step 14)
+    note = note_from(data)  # goes into the student's notification
     conn = db.get_db()
     cur = conn.cursor()
     now = datetime.now()
     booking = faculty_booking(cur, bid, ("Pending", "Waiting"))
     ref = str(data.get("ref") or "") or created_session(cur, booking["faculty_id"], data, now)
-    moved = move(cur, booking, ref, now)
+    moved = move(cur, booking, ref, now, note)
     conn.commit()
     return jsonify(ok=True, booking=moved)
 

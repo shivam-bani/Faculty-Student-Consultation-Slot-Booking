@@ -13,6 +13,7 @@ import bookings
 import commands
 import db  # also loads .env
 import faculty
+import notifications
 import queue_manager
 import timetable
 
@@ -51,6 +52,7 @@ commands.init_app(app)
 app.register_blueprint(auth.bp)
 app.register_blueprint(bookings.bp)
 app.register_blueprint(faculty.bp)
+app.register_blueprint(notifications.bp)
 app.register_blueprint(queue_manager.bp)
 app.register_blueprint(timetable.bp)
 

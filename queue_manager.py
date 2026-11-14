@@ -24,7 +24,8 @@ from flask import Blueprint, abort, current_app, jsonify
 
 import db
 from auth import current_user, error, json_body, login_required
-from bookings import MONTHS, lock_faculty, log, own_active_booking, visible
+from bookings import MONTHS, booking_info, lock_faculty, log, own_active_booking, visible
+from notifications import notify
 
 bp = Blueprint("queue", __name__, url_prefix="/api")
 
@@ -145,6 +146,9 @@ def call_next(sid):
     if nxt:
         cur.execute("UPDATE bookings SET status = 'In Session', called_at = NOW() WHERE id = %s", (nxt[0],))
         log(cur, nxt[0], f"Called in by faculty (priority {int(nxt[4])})")
+        info = booking_info(cur, nxt[0])
+        notify(cur, info["student_id"], "It's your turn",
+               f"{info['faculty']} is ready for you now ({info['when']}, token #{info['token']}).")
     conn.commit()
     return jsonify(ok=True, completed=student_json(current), called=student_json(nxt[:4] if nxt else None),
                    priority=int(nxt[4]) if nxt else None)

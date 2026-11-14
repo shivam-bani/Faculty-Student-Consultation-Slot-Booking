@@ -14,6 +14,8 @@ from flask import Blueprint, abort, jsonify, make_response
 import commands
 import db
 from auth import error, json_body, login_required
+from notifications import timetable_changed
+from slots import DAY_NAMES
 
 bp = Blueprint("timetable", __name__, url_prefix="/api")
 
@@ -70,6 +72,19 @@ def mark_edited(cur, pid):
     cur.execute("UPDATE timetable_profiles SET edited = TRUE WHERE id = %s", (pid,))
 
 
+def tell_faculty(cur, pid, what):
+    """Notify the active faculty member who uses this timetable (if any) about the change."""
+    cur.execute("SELECT f.faculty_id FROM faculty_settings f JOIN users u ON u.id = f.faculty_id "
+                "WHERE f.profile_id = %s AND u.is_active", (pid,))
+    row = cur.fetchone()
+    if row:
+        timetable_changed(cur, row[0], what)
+
+
+def when(day, start, end):
+    return f"{DAY_NAMES[day - 1]}, {start} - {end}"
+
+
 @bp.get("/timetables")
 @login_required()
 def list_timetables():
@@ -94,6 +109,8 @@ def add_class(pid):
                 "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)", (pid, *values))
     cid = cur.lastrowid
     mark_edited(cur, pid)
+    day, start, end, code = values[:4]
+    tell_faculty(cur, pid, f"added {'a busy period' if code == 'Busy' else 'a class'} on {when(day, start, end)}")
     conn.commit()
     return make_response(jsonify(ok=True, **{"class": class_json(class_or_404(cur, cid))}), 201)
 
@@ -104,10 +121,12 @@ def update_class(cid):
     values = class_from_request()
     conn = db.get_db()
     cur = conn.cursor()
-    pid = class_or_404(cur, cid)[1]
+    _, pid, old_day, old_start, _, old_code = class_or_404(cur, cid)[:6]
     cur.execute("UPDATE timetable_classes SET day_of_week = %s, start_time = %s, end_time = %s, code = %s, "
                 "subject = %s, section = %s, room = %s WHERE id = %s", (*values, cid))
     mark_edited(cur, pid)
+    day, start, end = values[:3]
+    tell_faculty(cur, pid, f"changed {old_code} ({DAY_NAMES[old_day - 1][:3]} {old_start}) to {DAY_NAMES[day - 1]} {start} - {end}")
     conn.commit()
     return jsonify(ok=True, **{"class": class_json(class_or_404(cur, cid))})
 
@@ -118,9 +137,10 @@ def delete_class(cid):
     json_body()
     conn = db.get_db()
     cur = conn.cursor()
-    pid = class_or_404(cur, cid)[1]
+    _, pid, day, start, end, code = class_or_404(cur, cid)[:6]
     cur.execute("DELETE FROM timetable_classes WHERE id = %s", (cid,))
     mark_edited(cur, pid)
+    tell_faculty(cur, pid, f"removed {code} on {when(day, start, end)}. That time is now open for consultations")
     conn.commit()
     return jsonify(ok=True)
 
@@ -140,5 +160,6 @@ def restore(pid):
     cur.executemany("INSERT INTO timetable_classes (profile_id, day_of_week, start_time, end_time, code, subject, section, room) "
                     "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)", [(pid, *c[:6], c[6] or "") for c in original["classes"]])
     cur.execute("UPDATE timetable_profiles SET name = %s, edited = FALSE WHERE id = %s", (original["name"], pid))
+    tell_faculty(cur, pid, "restored your timetable to the official university timetable")
     conn.commit()
     return jsonify(ok=True)
