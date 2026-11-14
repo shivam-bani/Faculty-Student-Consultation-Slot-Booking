@@ -94,6 +94,8 @@ tbody tr:hover{background:#f7faf9}
 .pill.completed,.cal-ev.completed{background:#e4eaea;color:#455658}
 .pill.cancelled,.cal-ev.cancelled,.pill.closed,.cal-ev.closed,.pill.full,.cal-ev.full,.pill.rejected,.cal-ev.rejected{background:#f8dedc;color:#8f2e29}
 .pill.expired,.cal-ev.expired{background:#eceff0;color:#5d6d6f}
+.pill.missed,.cal-ev.missed{background:#eceff0;color:#5d6d6f}
+.pill.checkedin,.cal-ev.checkedin{background:#dbeee6;color:#1a6143}
 .pill.pending,.cal-ev.pending{background:#e3ecf7;color:#234a78}
 .pill.accepted,.cal-ev.accepted{background:#dbeee6;color:#1a6143}
 .pill.reschedulerequested,.cal-ev.reschedulerequested{background:#efe3f6;color:#5d2c78}
