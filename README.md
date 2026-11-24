@@ -1,132 +1,92 @@
 # CampusSync
 
-## Setup (Windows, once)
-Needs Python 3.14 and MySQL Server 8.4 (running as a Windows service). In PowerShell 7, in this folder:
+Book consultation slots with faculty, and get a fair queue on the day of the meeting.
 
-```
+A project for the Operating Systems and DBMS course at Graphic Era, by Team Cipher.
+
+![Live Queue: checked-in students in calling order](docs/screenshots/live-queue.png)
+
+## Why we built it
+
+Students usually wait outside a faculty cabin without knowing when they will be seen, and a
+final-year student with a project deadline waits as long as everyone else. CampusSync turns each
+faculty member's free periods into bookable slots and runs a small queue for every slot:
+
+- Free time between classes, taken from the university timetable, is offered as slots automatically.
+- A student books a slot. The faculty member accepts, rejects or moves the request.
+- On the day, students press **I'm here** and see their place in the queue.
+- The faculty member calls them in one at a time from the **Live Queue**.
+
+<p>
+  <img src="docs/screenshots/slots.png" width="49%" alt="Available slots for a student">
+  <img src="docs/screenshots/booking-requests.png" width="49%" alt="Booking requests for a faculty member">
+</p>
+
+## Who goes next
+
+A slot is served one student at a time, like a CPU running one process at a time.
+
+- Major project consultations from semester VII or VIII start at priority 2. Everything else starts at 1.
+- Waiting starts at check-in, not at booking. Every 10 minutes of waiting adds 1 to a student's
+  priority (aging), so nobody gets overtaken forever.
+- The highest priority goes first. Ties go to whoever checked in first, then to the lower token.
+
+## How it works
+
+- A Flask (Python) JSON API with a MySQL database. The pages are plain HTML, CSS and JavaScript.
+- Each booking runs in one MySQL transaction with row locks (`SELECT ... FOR UPDATE`). A 3-seat slot
+  never gets a fourth student, even when ten people book at the same moment. Locks are always taken in
+  the same order (student, faculty, session) so two bookings cannot deadlock.
+- 13 tables with primary key, foreign key, `UNIQUE` and `CHECK` constraints. For example, the database
+  itself allows at most one student "In Session" per slot.
+- Passwords are stored as scrypt hashes, and every request is checked on the server for role and ownership.
+- 189 automated tests, including a race test (10 simultaneous bookings for 3 seats) and the queue rules.
+
+## Running it locally (Windows)
+
+You need Python 3.14 and MySQL 8.4 running as a Windows service.
+
+```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
-python tools/setup_db.py                   # asks for the MySQL root password; creates the database, the app user and .env
-flask --app app import-timetable           # loads the 101 faculty timetables into MySQL
-flask --app app create-admin               # asks for the admin's name, email and password
+python tools/setup_db.py           # database, app user and .env (asks for the MySQL root password)
+flask --app app import-timetable   # loads the faculty timetables
+flask --app app create-admin       # creates your admin login
 ```
 
-`.env` holds the database password and the secret key. It is created by `tools/setup_db.py`
-and must never be committed or shared.
+Then double-click `start.bat` (or run `python app.py`) and open http://127.0.0.1:5000/.
 
-## Run
-Double-click **`start.bat`** (starts the app and opens the browser; close its window to stop).
-For a presentation, double-click **`demo.bat`** instead: it replaces the demo accounts
-(`demo.*@geu.ac.in`) with fresh data around the current time (a slot starting in a few minutes,
-three accepted students, pending requests), uses 1-minute aging for that run only, and opens
-`demo-logins.txt` (git-ignored) with the logins and a suggested order. Your admin account and
-other data are not touched. By hand:
+`demo.bat` creates demo accounts with a slot that starts in a few minutes and writes their logins to
+`demo-logins.txt`. Your own admin account is not changed.
+
+Tests: `python -m unittest discover -s tests -v` (MySQL must be running).
+
+The [user guide](docs/user-guide.md) explains what students, faculty and the admin can do.
+
+## Project layout
+
 ```
-.\.venv\Scripts\Activate.ps1
-python app.py
+app.py             Flask app and settings
+auth.py            sign-up, login and roles
+bookings.py        the booking transaction, student and faculty actions
+queue_manager.py   check-in, priority with aging, call next
+faculty.py         faculty accounts and consultation settings
+timetable.py       timetable editing
+slots.py           free-slot calculation
+notifications.py   in-app notifications
+schema.sql         tables and constraints
+static/            the web pages
+tests/             automated tests
+tools/             database setup and timetable data scripts
 ```
-Then open http://127.0.0.1:5000/. Tests: `python -m unittest discover -s tests -v` (needs MySQL running).
 
-All data is on the server (MySQL): accounts, faculty, timetables, consultation settings,
-bookings, the queue and notifications, so every user sees the same data from any browser.
-Nothing is saved in the browser: each page loads what the logged-in user may see into memory,
-and loads it again after every change.
+## Limitations
 
-## Logging in
-- **Admin:** created with `flask --app app create-admin` (there is no built-in admin). Click
-  **Login as Admin**; the password can be changed under **Account**.
-- **Faculty:** the admin creates the account under **Faculty** (pick the name from the timetable
-  list, click **Create account**, set email + temporary password). The faculty member then uses
-  **Login as Faculty**. The admin can reset a forgotten password there.
-- **Students:** sign up on the Sign Up page with an `@geu.ac.in` email, then **Login as Student**.
-- Passwords are stored only as hashes. Who is logged in (and their role) is decided by the server.
-- Opening the login page logs the current user out.
+- The semester is entered by the student, so Major project priority depends on what they report.
+- Pages refresh every 15 seconds; there are no instant push updates.
+- It runs on Flask's development server and is meant for a local demo, not a public deployment.
 
-## Roles
-**Admin** (Faculty, Timetables, Account)
-- Faculty: all 101 teachers from the timetable files are listed; **Create account** links the
-  account to that person's classes. Teachers not in the files can be added by name (a name that
-  matches the timetable is linked automatically). **Link timetable** fixes a wrong link,
-  **Reset password** sets a new temporary password, **Remove** cancels their open bookings
-  and notifies the students.
-- Timetables: add a class, a busy period (duty, meeting, leave) or extra consultation hours;
-  select a class to edit or remove it; switch individual free slots off; set slot length,
-  students per slot and consultation days; restore the imported timetable.
-  If a change makes an already booked meeting clash with a class, the faculty member is
-  notified and the meeting is flagged on their Booking Requests page.
+## Team
 
-**Faculty** (Booking Requests, Live Queue, My Timetable, Calendar, Notifications)
-- Accept, reject or reschedule requests; reschedule or cancel accepted meetings;
-  approve or decline a student's request to change time.
-- Live Queue: the students who pressed "I'm here", in calling order, with waiting time and
-  priority. **Call next** finishes the current student and calls the next one in.
-- My Timetable is read-only; the admin maintains it.
-
-**Student** (Dashboard, Available Slots, Book Consultation, My Appointments, Calendar, Notifications)
-- Free time between a faculty member's classes is offered automatically as slots;
-  nobody creates sessions by hand. The student requests a slot with their details and the
-  consultation type (General or Major project).
-- On the day, from `CHECKIN_EARLY_MINUTES` before the slot until it ends, an accepted student
-  presses **I'm here** on My Appointments and sees their place in the queue.
-
-### Queue manager (`queue_manager.py`)
-A slot is served one student at a time, like one CPU shared by processes.
-- Base priority 2 for semester VII/VIII **Major project** consultations, otherwise 1 (set by the
-  server when booking; the semester comes from the student's own profile).
-- Waiting starts at check-in. **Aging:** priority + 1 for every completed `AGING_MINUTES` of
-  waiting, so a long-waiting student overtakes newer high-priority ones (no starvation).
-- Call next picks the highest priority, then the earliest check-in, then the lowest token, in
-  one locked transaction; at most one student can be "In Session" per slot.
-- Both settings are in `.env` (default 10 minutes each). For a classroom demo set
-  `AGING_MINUTES=1` and restart `python app.py`.
-
-Status flow: Pending -> Accepted -> (I'm here) -> In Session -> Completed, or Rejected / Cancelled.
-When the slot's time is over: never answered -> Expired, accepted but never called in -> Missed.
-
-## Files
-- `static/`: the pages, `style.css`, `script.js` and `timetable-data.js`, served by Flask.
-- `app.py` (Flask app), `db.py` (MySQL connection), `commands.py` (`flask` commands),
-  `schema.sql` (tables and constraints), `tools/setup_db.py` (database setup), `tests/`.
-- API: `auth.py` (sign up, login, roles), `faculty.py` (faculty accounts and settings),
-  `timetable.py` (timetable editing), `slots.py` (free-slot calculation), `bookings.py`
-  (booking in one locked transaction, student and faculty actions), `queue_manager.py`
-  (check-in, priority with aging, call next), `notifications.py` (each one is saved in the same
-  transaction as the action it describes).
-- `static/timetable-data.js`: imported faculty schedules (contact numbers deliberately excluded).
-  The admin's edits are stored separately, so this file is only the starting point.
-- `tools/build_timetable_data.py`: rebuilds it when a new timetable is published.
-- `tools/verify_timetable_data.py`: checks the data against the source files
-  (current result: 270/270 PDF subject codes placed correctly, 1526/1526 class periods present).
-- When timetable-data.js changes, run `flask --app app import-timetable` again; timetables the
-  admin edited by hand are kept.
-
-## Tests
-`python -m unittest discover -s tests -v` (MySQL must be running; the tests create and then
-delete their own `unittest-...` accounts). 189 tests, including:
-- `test_end_to_end.py`: a whole consultation day through the API (admin, sign-up, booking,
-  accepting, check-in, priority queue, notifications, removing the faculty member).
-- `test_concurrency.py`: 10 students book a 3-seat slot at the same moment, 5 times: always
-  exactly 3 succeed with tokens 1, 2, 3; a double click books once; deadlocks are retried.
-- `test_queue.py`: priority, aging (including the exact minute it applies), tie-breaks,
-  check-in window, and two simultaneous "Call next" clicks calling only one student.
-- Database rules: duplicate and invalid rows are refused by PRIMARY KEY, FOREIGN KEY, UNIQUE
-  and CHECK constraints (`schema.sql`), and the app turns those refusals into clear messages.
-
-## Demo walk-through
-1. Admin: **Faculty** -> pick a name -> **Create account** (email + temporary password).
-2. Two students sign up (`@geu.ac.in`) and book the same slot; one chooses **Major project**
-   with semester VII or VIII.
-3. Faculty: **Booking Requests** -> **Accept** both. Students see "Request accepted" under
-   **Notifications**.
-4. On the day of the slot, each student presses **I'm here** on **My Appointments** and sees
-   their queue position. (For a classroom demo, first let the admin add extra consultation
-   hours for today starting a few minutes from now under **Timetables**, and book that slot.)
-5. Faculty: **Live Queue** -> **Call next**: the Major project student is called first; with
-   `AGING_MINUTES=1` a General student who has waited longer catches up.
-
-## Known limitations (demo)
-- New notifications and queue changes appear when a page loads or refreshes itself (every
-  15 seconds on My Appointments and Live Queue); there is no instant push.
-- The student's semester is self-reported in their profile (used for Major project priority).
-- Students' own class clashes are not checked yet (only clashes with their other bookings).
+Team Cipher: Varuni Tomar (frontend) and Shivam Bani (backend and database).
